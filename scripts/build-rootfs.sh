@@ -27,14 +27,48 @@ DBROOT=""
 trap 'sudo rm -rf "$ROOTFS" "$ARCHIVE" "$PY" "$DBROOT"' EXIT
 mkdir -p "$OUT"
 
-if ! command -v xz >/dev/null 2>&1; then
+if ! command -v xz >/dev/null 2>&1 || ! command -v mkfs.ext4 >/dev/null 2>&1; then
   sudo apt-get update -qq >/dev/null 2>&1 || true
-  sudo apt-get install -y -qq xz-utils >/dev/null 2>&1 || true
+  sudo apt-get install -y -qq xz-utils e2fsprogs >/dev/null 2>&1 || true
 fi
 
 pack() { # $1 tarball  $2 rootfs dir
   sudo tar --numeric-owner --use-compress-program='xz -9e --threads=0' \
     -c -f "$1" -C "$2" .
+}
+
+# Project the rootfs onto a raw ext4 disk image, then shrink the filesystem
+# (resize2fs -M) so the .img is the smallest size that fits. The filesystem is
+# created with 4k blocks, no reserved blocks and no journal so that
+# resize2fs -M's computed minimum matches what e2fsck accepts, letting the
+# file be truncated to exactly the final block count.
+make_img() { # $1 img path  $2 rootfs dir
+  local img="$1" root="$2"
+  local used blocks mnt
+  used="$(sudo du -sB 4096 "$root" | cut -f1)"
+  # 12% headroom for ext4 metadata; resize2fs -M reclaims everything unused
+  blocks=$(( (used * 112 / 100 + 4095) / 4096 ))
+  # 64 MiB floor keeps the filesystem sane for tiny rootfs builds
+  [ "$blocks" -ge 16384 ] || blocks=16384
+  truncate -s $((blocks * 4096)) "$img"
+  sudo mkfs.ext4 -q -F -m 0 -O ^has_journal,^metadata_csum -b 4096 "$img"
+  mnt="$(mktemp -d)"
+  sudo mount -o loop "$img" "$mnt"
+  sudo cp -a "$root"/. "$mnt"/
+  sudo umount "$mnt"
+  sudo rmdir "$mnt"
+
+  sudo e2fsck -fy "$img" >/dev/null 2>&1
+  sudo resize2fs -M "$img" >/dev/null 2>&1
+  blocks="$(sudo dumpe2fs -h "$img" 2>/dev/null | awk '/^Block count:/{print $3}')"
+  [ -n "$blocks" ] || { echo "error: could not read shrunk block count from $img" >&2; exit 1; }
+  truncate -s $((blocks * 4096)) "$img"
+  # belt and suspenders: the shrunk fs must pass a full check
+  sudo e2fsck -fn "$img" >/dev/null 2>&1 || {
+    echo "error: shrunk $img fails e2fsck" >&2
+    sudo e2fsck -fn "$img" >&2 || true
+    exit 1
+  }
 }
 
 report() {
@@ -296,6 +330,9 @@ PY
 esac
 
 ARTIFACT="$OUT/$NAME-rootfs.tar.xz"
+IMG="$OUT/$NAME.img"
 pack "$ARTIFACT" "$ROOTFS"
-( cd "$OUT" && sha256sum "$NAME-rootfs.tar.xz" > "$NAME-SHA256SUMS" )
+make_img "$IMG" "$ROOTFS"
+( cd "$OUT" && sha256sum "$NAME-rootfs.tar.xz" "$NAME.img" > "$NAME-SHA256SUMS" )
 report "$ARTIFACT"
+report "$IMG"

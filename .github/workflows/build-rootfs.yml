@@ -108,7 +108,7 @@ jobs:
           cd artifacts
           cat *-SHA256SUMS > SHA256SUMS
           gh release create "$GITHUB_REF_NAME" \
-            *.tar.xz SHA256SUMS \
+            *.tar.xz *.img SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
             --notes "Minimal rootfs tarballs for the latest Debian / Ubuntu / Alpine stable."
