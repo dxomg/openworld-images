@@ -119,7 +119,7 @@ until apt-get update -qq 2>/dev/null; do
   sleep "$((i * 5))"
 done
 apt-get install -y --no-install-recommends \
-  systemd-sysv cloud-init dropbear ifupdown >/dev/null
+  systemd-sysv cloud-init dropbear ifupdown isc-dhcp-client >/dev/null
 # dropbear is the only ssh server (openssh-server is never installed, not even
 # as a dependency): disable password logins so ssh_pwauth: false holds for it
 # too, and let the package auto-start it at boot (its postinst runs
@@ -145,6 +145,12 @@ iface lo inet loopback
 
 auto eth0
 iface eth0 inet dhcp
+EOF
+# predictably-name the first ethernet NIC `eth0` so the `auto eth0` stanza above
+# matches: systemd-udevd's predictable naming would otherwise leave QEMU/KVM
+# virtio NICs as enp1s0/etc. (ifupdown only matches by exact name)
+cat > /etc/udev/rules.d/99-openworld-eth0.rules <<'EOF'
+SUBSYSTEM=="net", ACTION=="add", KERNEL!="lo|eth*", ATTR{type}=="1", NAME="eth0"
 EOF
 apt-get clean
 rm -rf /var/lib/apt/lists/*
@@ -179,26 +185,30 @@ until apt-get update -qq 2>/dev/null; do
   sleep "$((i * 5))"
 done
 apt-get install -y --no-install-recommends \
-  systemd-sysv cloud-init dropbear netplan.io >/dev/null
+  systemd-sysv cloud-init dropbear ifupdown isc-dhcp-client >/dev/null
 # A chroot-built image never runs systemd-sysusers or systemd-tmpfiles, so the
-# systemd-network/systemd-timesync system users, /var/lib/systemd and
-# /etc/systemd/network are missing. systemd-networkd (and its
-# ...-persistent-storage unit) refuse to start without them, taking DHCP with
-# them. Materialize the users/state dirs now.
+# systemd system users (journald sockets, systemd-timesync) and state dirs are
+# missing. Materialize them now.
 systemd-sysusers 2>/dev/null || true
 systemd-tmpfiles --create 2>/dev/null || true
-mkdir -p /etc/systemd/network
-# netplan renders through systemd-networkd; ensure it is enabled at boot
-systemctl enable systemd-networkd.service >/dev/null 2>&1 || true
-# belt and suspenders: ship a direct networkd DHCP file so eth0 comes up even
-# if netplan's boot-time generator is missing or too late (a same-prefix file
-# in /etc wins over netplan's /run copy, so this can't conflict)
-cat > /etc/systemd/network/10-eth0.network <<'EOF'
-[Match]
-Name=eth0
+# Ubuntu's classic ifupdown stack (networking.service -> ifup -> dhclient) is
+# used instead of netplan/systemd-networkd: networkd refuses to start in a
+# minimal chroot-built image without materialized sandbox state (User
+# systemd-network, /var/lib/systemd, varlink sockets), which wedges the whole
+# network stage. Networking stays out of cloud-init's hands.
+cat > /etc/network/interfaces <<'EOF'
+source /etc/network/interfaces.d/*
+auto lo
+iface lo inet loopback
 
-[Network]
-DHCP=yes
+auto eth0
+iface eth0 inet dhcp
+EOF
+# predictably-name the first ethernet NIC `eth0` so the `auto eth0` stanza above
+# matches: systemd-udevd's predictable naming would otherwise leave QEMU/KVM
+# virtio NICs as enp1s0/etc. (ifupdown only matches by exact name)
+cat > /etc/udev/rules.d/99-openworld-eth0.rules <<'EOF'
+SUBSYSTEM=="net", ACTION=="add", KERNEL!="lo|eth*", ATTR{type}=="1", NAME="eth0"
 EOF
 # dropbear is the only ssh server (openssh-server is never installed): disable
 # password logins so ssh_pwauth: false holds for it too; the package's
@@ -206,8 +216,7 @@ EOF
 sed -i 's/^DROPBEAR_EXTRA_ARGS=.*/DROPBEAR_EXTRA_ARGS="-s"/' \
   /etc/default/dropbear 2>/dev/null || \
   echo 'DROPBEAR_EXTRA_ARGS="-s"' >> /etc/default/dropbear
-# NoCloud only, root ssh disabled; Ubuntu's network is netplan + systemd-networkd
-# (ifupdown is not in Ubuntu main anymore), still left out of cloud-init's hands
+# NoCloud only, root ssh disabled
 cat > /etc/cloud/cloud.cfg.d/99-openworld.cfg <<'EOF'
 datasource_list: [ NoCloud ]
 disable_root: true
@@ -216,14 +225,6 @@ ssh_genkeytypes: []
 network:
   config: disabled
 EOF
-cat > /etc/netplan/99-openworld.yaml <<'EOF'
-network:
-  version: 2
-  ethernets:
-    eth0:
-      dhcp4: true
-EOF
-chmod 0600 /etc/netplan/99-openworld.yaml
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 # newly installed packages brought their own docs/locales/zone-data back
