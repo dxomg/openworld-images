@@ -27,6 +27,7 @@ PY="${ROOTFS}.py"
 
 DBROOT=""
 DEBOOTSTRAP=""
+DEBOOTSTRAP_DIR=""
 trap 'sudo rm -rf "$ROOTFS" "$ARCHIVE" "$PY" "$DBROOT"' EXIT
 mkdir -p "$OUT"
 
@@ -51,6 +52,7 @@ print_report() {
 
 # Grab the newest debootstrap straight from Debian's pool so the moment a new
 # Debian/Ubuntu codename is released it can still be bootstrapped.
+# debootstrap hardcodes DEBOOTSTRAP_DIR, so we point it at the extracted copy.
 latest_debootstrap() {
   local deb
   deb="$(curl -fsSL --retry 3 https://deb.debian.org/debian/pool/main/d/debootstrap/ \
@@ -60,6 +62,8 @@ latest_debootstrap() {
   curl -fsSL --retry 3 -o "$DBROOT/db.deb" "https://deb.debian.org/debian/pool/main/d/debootstrap/$deb"
   dpkg -x "$DBROOT/db.deb" "$DBROOT"
   DEBOOTSTRAP="$DBROOT/usr/sbin/debootstrap"
+  DEBOOTSTRAP_DIR="$DBROOT/usr/share/debootstrap"
+  scripts_dir="$DEBOOTSTRAP_DIR/scripts"
 }
 
 case "$DISTRO" in
@@ -81,12 +85,13 @@ case "$DISTRO" in
     fi
 
     if latest_debootstrap; then
-      echo "using debootstrap $("$DEBOOTSTRAP" --version | head -n1 | awk '{print $NF}') from the Debian pool"
-      scripts_dir="$(dirname "$DEBOOTSTRAP")/../share/debootstrap/scripts"
+      DEBOOTSTRAP_VER="$(sed -n "s/^VERSION='\(.*\)'$/\1/p" "$DEBOOTSTRAP" | head -n1)"
+      echo "using debootstrap ${DEBOOTSTRAP_VER:-from the Debian pool}"
     else
       echo "warning: could not fetch the latest debootstrap, falling back to the system package" >&2
       sudo apt-get install -y -qq debootstrap >/dev/null 2>&1 || true
       DEBOOTSTRAP="$(command -v debootstrap)"
+      DEBOOTSTRAP_DIR=""
       scripts_dir="/usr/share/debootstrap/scripts"
     fi
 
@@ -96,7 +101,8 @@ case "$DISTRO" in
       exit 1
     }
 
-    sudo "$DEBOOTSTRAP" --quiet --variant=minbase --components=main \
+    sudo env DEBOOTSTRAP_DIR="$DEBOOTSTRAP_DIR" "$DEBOOTSTRAP" --quiet \
+      --variant=minbase --components=main \
       --include=ca-certificates \
       --exclude=e2fsprogs,tzdata,diffutils \
       --arch "$ARCH" "$SUITE" "$ROOTFS" "$MIRROR"
