@@ -1,4 +1,4 @@
-name: build-rootfs
+name: build-images
 
 on:
   workflow_dispatch:
@@ -11,12 +11,17 @@ on:
         description: "Comma-separated architectures (amd64, arm64, ...). Blank = amd64,arm64."
         required: false
         default: ""
+      ssh_pubkey:
+        description: "Public ssh key (one line) to bake into the 'openworld' user so the images accept key ssh login."
+        required: false
+        default: ""
   push:
     branches: [main]
     tags: ['*']
     paths:
-      - ".github/workflows/build-rootfs.yml"
+      - ".github/workflows/build-images.yml"
       - "scripts/**"
+      - "images/**"
   schedule:
     - cron: "0 3 * * 1"
 
@@ -76,9 +81,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Start docker daemon
+        run: |
+          docker info >/dev/null 2>&1 || sudo service docker start >/dev/null 2>&1 || true
+          for i in $(seq 1 10); do
+            docker info >/dev/null 2>&1 && exit 0
+            sleep 3
+          done
+          echo "docker daemon did not come up" >&2
+          exit 1
+
+      # cross-arch RUN steps inside the Dockerfiles need binfmt_misc qemu
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
       - name: Build cloud image (latest stable)
         env:
           ARCH: ${{ matrix.arch }}
+          OPENWORLD_PUBKEY: ${{ inputs.ssh_pubkey }}
         run: bash scripts/build-rootfs.sh "${{ matrix.name }}"
 
       - name: Upload artifact
@@ -111,4 +131,4 @@ jobs:
             *.img SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
-            --notes "NoCloud cloud-init disk images (.img) for the latest Debian / Ubuntu / Alpine stable. Each image boots with dropbear as its SSH server (no OpenSSH, key-only logins); provision users and SSH keys via user-data."
+            --notes "Bootable ext4 disk images (.img) for the latest Debian / Ubuntu / Alpine stable, built from Docker base images (no cloud-init). Each image boots with dropbear as its SSH server (no OpenSSH, key-only logins); pass the ssh_pubkey input at dispatch time to bake a public key into the 'openworld' user's authorized_keys."

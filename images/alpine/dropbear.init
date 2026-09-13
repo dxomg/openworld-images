@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+description="Dropbear SSH server"
+depend() { need net; }
+
+start() {
+  [ -f /etc/dropbear/dropbear_rsa_host_key ] || \
+    /usr/bin/dropbearkey -t rsa -f /etc/dropbear/dropbear_rsa_host_key 2>/dev/null
+  [ -f /etc/dropbear/dropbear_ed25519_host_key ] || \
+    /usr/bin/dropbearkey -t ed25519 -f /etc/dropbear/dropbear_ed25519_host_key 2>/dev/null
+  ebegin "Starting dropbear sshd"
+  start-stop-daemon --start --quiet --background --make-pidfile \
+    --pidfile /run/$RC_SVCNAME.pid --exec /usr/sbin/dropbear -- -p 22 -s \
+      -r /etc/dropbear/dropbear_rsa_host_key \
+      -r /etc/dropbear/dropbear_ed25519_host_key
+  eend $?
+}
+
+stop() {
+  ebegin "Stopping dropbear sshd"
+  start-stop-daemon --stop --quiet --pidfile /run/$RC_SVCNAME.pid
+  eend $?
+}
