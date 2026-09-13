@@ -151,7 +151,7 @@ CI
 set -e
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export DEBIAN_FRONTEND=noninteractive
-# minbase enabled only 'main'; dropbear-run lives in universe, so enable it
+# enabled only 'main'; dropbear lives in universe, so enable it
 # for whatever suites are configured (deb822 or legacy sources.list)
 f="$(grep -rl '^Components:.*' /etc/apt/sources.list.d/ 2>/dev/null | head -1)"
 if [ -n "$f" ]; then
@@ -168,7 +168,7 @@ until apt-get update -qq 2>/dev/null; do
   sleep "$((i * 5))"
 done
 apt-get install -y --no-install-recommends \
-  systemd-sysv cloud-init dropbear-run netplan.io >/dev/null
+  systemd-sysv cloud-init dropbear netplan.io >/dev/null
 # netplan renders through systemd-networkd; ensure it is enabled at boot
 systemctl enable systemd-networkd.service >/dev/null 2>&1 || true
 # NoCloud only, root ssh disabled; Ubuntu's network is netplan + systemd-networkd
