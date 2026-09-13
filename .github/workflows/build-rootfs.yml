@@ -111,4 +111,4 @@ jobs:
             *.tar.xz *.img SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
-            --notes "Minimal rootfs tarballs for the latest Debian / Ubuntu / Alpine stable."
+            --notes "Minimal rootfs tarballs plus NoCloud cloud-init disk images (.img) for the latest Debian / Ubuntu / Alpine stable. Images boot with dropbear sshd; provision users/ssh keys via user-data."

@@ -44,11 +44,19 @@ pack() { # $1 tarball  $2 rootfs dir
 # file be truncated to exactly the final block count.
 make_img() { # $1 img path  $2 rootfs dir
   local img="$1" root="$2"
-  local used blocks mnt
+  local used blocks mnt cinit=0
   used="$(sudo du -sB 4096 "$root" | cut -f1)"
-  # 12% headroom for ext4 metadata; resize2fs -M reclaims everything unused
-  # (du -sB 4096 already counts in 4k blocks, so no extra rounding needed)
-  blocks=$(( used * 112 / 100 ))
+  if [ -f "$root/tmp/cloud-init.sh" ]; then
+    cinit=1
+    # cloud-init + python3 + systemd add a lot of packages; oversize the
+    # staging fs (mkfs writes all of it) and let resize2fs -M reclaim the
+    # slack afterwards, so the shipped .img stays minimal
+    blocks=$(( used * 400 / 100 ))
+    [ "$blocks" -ge 262144 ] || blocks=262144   # 1 GiB floor for provisioning
+  else
+    # 12% headroom for ext4 metadata (du -sB 4096 already counts in 4k blocks)
+    blocks=$(( used * 112 / 100 ))
+  fi
   # 64 MiB floor keeps the filesystem sane for tiny rootfs builds
   [ "$blocks" -ge 16384 ] || blocks=16384
   truncate -s $((blocks * 4096)) "$img"
@@ -56,6 +64,28 @@ make_img() { # $1 img path  $2 rootfs dir
   mnt="$(mktemp -d)"
   sudo mount -o loop "$img" "$mnt"
   sudo cp -a "$root"/. "$mnt"/
+
+  if [ "$cinit" = 1 ]; then
+    # package maintainer scripts expect /proc,/sys,/dev (debootstrap mounts
+    # them during its own second stage); hand the fresh image the host's so
+    # the cloud-init install behaves. The minirootfs also has no resolv.conf.
+    sudo mkdir -p "$mnt/proc" "$mnt/sys" "$mnt/dev"
+    sudo mount --bind /proc "$mnt/proc"
+    sudo mount --bind /sys "$mnt/sys"
+    sudo mount --bind /dev "$mnt/dev"
+    sudo cp /etc/resolv.conf "$mnt/etc/resolv.conf" 2>/dev/null || true
+    if ! sudo chroot "$mnt" /bin/sh /tmp/cloud-init.sh; then
+      echo "error: cloud-init provisioning failed inside $img" >&2
+      sudo umount "$mnt/dev" "$mnt/sys" "$mnt/proc" 2>/dev/null || true
+      sudo umount "$mnt" 2>/dev/null || true
+      sudo rmdir "$mnt" 2>/dev/null || true
+      exit 1
+    fi
+    sudo umount "$mnt/dev" "$mnt/sys" "$mnt/proc"
+    # don't ship the build host's network config or the setup script
+    sudo rm -f "$mnt/etc/resolv.conf" "$mnt/tmp/cloud-init.sh"
+  fi
+
   sudo umount "$mnt"
   sudo rmdir "$mnt"
 
@@ -70,6 +100,164 @@ make_img() { # $1 img path  $2 rootfs dir
     sudo e2fsck -fn "$img" >&2 || true
     exit 1
   }
+}
+
+# Write a provisioning script for the .img: cloud-init is only baked into the
+# disk images (the rootfs tarballs stay bare). The script is placed in the
+# rootfs' world-writable /tmp so make_img can chroot into the mounted image
+# and run it; afterwards it is removed from both artifacts.
+make_cloud_init() { # uses $DISTRO and writes $ROOTFS/tmp/cloud-init.sh
+  case "$DISTRO" in
+    debian|ubuntu)
+      cat > "$ROOTFS/tmp/cloud-init.sh" <<'CI'
+#!/bin/sh
+set -e
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export DEBIAN_FRONTEND=noninteractive
+i=0
+until apt-get update -qq 2>/dev/null; do
+  i=$((i + 1))
+  [ "$i" -lt 5 ] || { echo "apt-get update failed after 5 tries" >&2; exit 1; }
+  echo "apt-get update retry $i..." >&2
+  sleep "$((i * 5))"
+done
+apt-get install -y --no-install-recommends \
+  systemd-sysv cloud-init dropbear ifupdown >/dev/null
+# force the NoCloud datasource and keep networking on plain ifupdown DHCP so a
+# missing netplan/seed never wedges the boot; root is never logged into via
+# ssh, users are provisioned from the seed with ssh keys
+cat > /etc/cloud/cloud.cfg.d/99-openworld.cfg <<'EOF'
+datasource_list: [ NoCloud ]
+disable_root: true
+ssh_pwauth: false
+network:
+  config: disabled
+EOF
+cat > /etc/network/interfaces <<'EOF'
+source /etc/network/interfaces.d/*
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet dhcp
+EOF
+apt-get clean
+rm -rf /var/lib/apt/lists/*
+CI
+      ;;
+    alpine)
+      cat > "$ROOTFS/tmp/cloud-init.sh" <<'CI'
+#!/bin/sh
+set -e
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+i=0
+until apk update >/dev/null 2>&1; do
+  i=$((i + 1))
+  [ "$i" -lt 5 ] || { echo "apk update failed after 5 tries" >&2; exit 1; }
+  echo "apk update retry $i..." >&2
+  sleep "$((i * 5))"
+done
+i=0
+until apk add --no-cache cloud-init dropbear netifrc \
+    >/dev/null 2>&1; do
+  i=$((i + 1))
+  [ "$i" -lt 5 ] || { echo "apk add cloud-init failed after 5 tries" >&2; exit 1; }
+  echo "apk add cloud-init retry $i..." >&2
+  sleep "$((i * 5))"
+done
+# the alpine cloud-init apk ships no init scripts: wire up the four stages as
+# OpenRC services mirroring the upstream systemd unit ordering
+cat >/etc/init.d/cloud-init-local <<'EOF'
+#!/sbin/openrc-run
+description="cloud-init local init stage"
+depend() { need sysfs devfs; }
+start() {
+  ebegin "cloud-init init --local"
+  /usr/bin/cloud-init init --local
+  eend $?
+}
+EOF
+cat >/etc/init.d/cloud-init <<'EOF'
+#!/sbin/openrc-run
+description="cloud-init init stage"
+depend() { need networking cloud-init-local; }
+start() {
+  ebegin "cloud-init init"
+  /usr/bin/cloud-init init
+  eend $?
+}
+EOF
+cat >/etc/init.d/cloud-config <<'EOF'
+#!/sbin/openrc-run
+description="cloud-init config stage"
+depend() { need cloud-init; }
+start() {
+  ebegin "cloud-init modules --mode=config"
+  /usr/bin/cloud-init modules --mode=config
+  eend $?
+}
+EOF
+cat >/etc/init.d/cloud-final <<'EOF'
+#!/sbin/openrc-run
+description="cloud-init final stage"
+depend() { need cloud-config; }
+start() {
+  ebegin "cloud-init modules --mode=final"
+  /usr/bin/cloud-init modules --mode=final
+  eend $?
+}
+EOF
+chmod +x /etc/init.d/cloud-init-local /etc/init.d/cloud-init \
+  /etc/init.d/cloud-config /etc/init.d/cloud-final
+# dropbear is the ssh server; it ships no init script either, so write one
+cat >/etc/init.d/dropbear <<'EOF'
+#!/sbin/openrc-run
+description="Dropbear SSH server"
+depend() { need net; }
+
+start() {
+  [ -f /etc/dropbear/dropbear_rsa_host_key ] || \
+    /usr/bin/dropbearkey -t rsa -f /etc/dropbear/dropbear_rsa_host_key 2>/dev/null
+  [ -f /etc/dropbear/dropbear_ed25519_host_key ] || \
+    /usr/bin/dropbearkey -t ed25519 -f /etc/dropbear/dropbear_ed25519_host_key 2>/dev/null
+  ebegin "Starting dropbear sshd"
+  start-stop-daemon --start --quiet --background --make-pidfile \
+    --pidfile /run/$RC_SVCNAME.pid --exec /usr/sbin/dropbear -- -p 22 \
+      -r /etc/dropbear/dropbear_rsa_host_key \
+      -r /etc/dropbear/dropbear_ed25519_host_key
+  eend $?
+}
+
+stop() {
+  ebegin "Stopping dropbear sshd"
+  start-stop-daemon --stop --quiet --pidfile /run/$RC_SVCNAME.pid
+  eend $?
+}
+EOF
+chmod +x /etc/init.d/dropbear
+cat > /etc/cloud/cloud.cfg.d/99-openworld.cfg <<'EOF'
+datasource_list: [ NoCloud ]
+disable_root: true
+ssh_pwauth: false
+network:
+  config: disabled
+EOF
+rc-update add cloud-init-local sysinit
+rc-update add networking default
+rc-update add dropbear default
+rc-update add cloud-init default
+rc-update add cloud-config default
+rc-update add cloud-final default
+cat > /etc/network/interfaces <<'EOF'
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet dhcp
+EOF
+CI
+      ;;
+  esac
 }
 
 report() {
@@ -378,7 +566,9 @@ esac
 ARTIFACT="$OUT/$NAME-rootfs.tar.xz"
 IMG="$OUT/$NAME.img"
 pack "$ARTIFACT" "$ROOTFS"
+make_cloud_init
 make_img "$IMG" "$ROOTFS"
+sudo rm -f "$ROOTFS/tmp/cloud-init.sh"
 ( cd "$OUT" && sha256sum "$NAME-rootfs.tar.xz" "$NAME.img" > "$NAME-SHA256SUMS" )
 report "$ARTIFACT"
 report "$IMG"
