@@ -19,12 +19,13 @@ on:
         description: "Debian/Ubuntu slim level. Slim (default) = keeps apt/dpkg, usable. bare = no package manager, absolute smallest."
         required: false
         default: "slim"
-      arch:
-        description: "Target architecture (amd64, arm64, ...). Only alpine supports cross-arch."
+      archs:
+        description: "Comma-separated target architectures (amd64, arm64, armhf, ...). Debian/Ubuntu are cross-built via qemu-user-static; alpine is multi-arch."
         required: false
-        default: "amd64"
+        default: "amd64,arm64"
   push:
     branches: [main]
+    tags: ['*']
     paths:
       - ".github/workflows/build-rootfs.yml"
       - "scripts/**"
@@ -48,16 +49,29 @@ jobs:
         id: gen
         env:
           INPUT: ${{ inputs.distros }}
+          ARCHES: ${{ inputs.archs }}
         run: |
           names="debian ubuntu alpine"
           if [ -n "$INPUT" ]; then
             names="$(printf '%s' "$INPUT" | tr ',' ' ' | xargs -n1 | sort -u | tr '\n' ' ')"
           fi
+          arches="amd64 arm64"
+          if [ -n "$ARCHES" ]; then
+            arches="$(printf '%s' "$ARCHES" | tr ',' ' ' | xargs -n1 | sort -u | tr '\n' ' ')"
+          fi
           json="["
           for n in $names; do
             case "$n" in
-              debian|ubuntu|alpine) json="${json}{\"name\":\"$n\"}," ;;
+              debian|ubuntu|alpine) ;;
+              *) continue ;;
             esac
+            for a in $arches; do
+              case "$a" in
+                amd64|i386|arm64|armhf|armel|riscv64|s390x|ppc64el) ;;
+                *) continue ;;
+              esac
+              json="${json}{\"name\":\"$n\",\"arch\":\"$a\"},"
+            done
           done
           json="${json%,}]"
           echo "matrix=$json" >> "$GITHUB_OUTPUT"
@@ -79,13 +93,13 @@ jobs:
           SUITE: ${{ inputs.suite }}
           ALPINE_VERSION: ${{ inputs.alpine_version }}
           MINIMAL: ${{ inputs.minimal }}
-          ARCH: ${{ inputs.arch }}
+          ARCH: ${{ matrix.arch }}
         run: bash scripts/build-rootfs.sh "${{ matrix.name }}"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rootfs-${{ matrix.name }}
+          name: rootfs-${{ matrix.name }}-${{ matrix.arch }}
           path: dist/
           if-no-files-found: error
           compression-level: 0

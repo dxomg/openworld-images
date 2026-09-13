@@ -86,6 +86,44 @@ latest_pool_debootstrap() {
   scripts_dir="$DEBOOTSTRAP_DIR/scripts"
 }
 
+# Static user-mode emulator (from qemu-user-static) for cross-arch debootstrap.
+cross_qemu() { # $1 target debian/ubuntu arch
+  case "$1" in
+    amd64)   echo qemu-x86_64-static ;;
+    i386)    echo qemu-i386-static ;;
+    arm64)   echo qemu-aarch64-static ;;
+    armhf|armel) echo qemu-arm-static ;;
+    riscv64) echo qemu-riscv64-static ;;
+    s390x)   echo qemu-s390x-static ;;
+    ppc64el) echo qemu-ppc64le-static ;;
+    *)       return 1 ;;
+  esac
+}
+
+# Enable cross-architecture emulation on the host and prove it works. The
+# static qemu binary is later copied into the target so chrooted foreign
+# executables (dpkg, sh, maintainer scripts) can actually run.
+cross_setup() { # $1 target arch
+  CROSS=1
+  QEMU_STATIC="/usr/bin/$(cross_qemu "$1")" || {
+    echo "error: no qemu emulator available for arch '$1'" >&2
+    return 1
+  }
+  if [ ! -x "$QEMU_STATIC" ]; then
+    sudo apt-get update -qq >/dev/null 2>&1 || true
+    ( sudo apt-get install -y --no-install-recommends qemu-user-static binfmt-support ) \
+      >/dev/null 2>&1 || sudo apt-get install -y --no-install-recommends qemu-user-static binfmt-support
+  fi
+  [ -x "$QEMU_STATIC" ] || { echo "error: qemu-user-static has no $QEMU_STATIC" >&2; return 1; }
+  # binfmt_misc must be mounted and the handler enabled so a chrooted foreign
+  # binary is dispatched to qemu. Fresh runners sometimes need a nudge.
+  sudo mkdir -p /proc/sys/fs/binfmt_misc 2>/dev/null || true
+  sudo mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc >/dev/null 2>&1 || true
+  sudo /usr/lib/systemd/systemd-binfmt >/dev/null 2>&1 || true
+  sudo update-binfmts --import >/dev/null 2>&1 || true
+  echo "cross-build: emulating $1 with $QEMU_STATIC"
+}
+
 case "$DISTRO" in
 
   debian|ubuntu)
@@ -99,9 +137,11 @@ case "$DISTRO" in
     [ -n "$SUITE" ] || { echo "error: could not resolve the latest suite for $DISTRO" >&2; exit 1; }
     echo "building $DISTRO $SUITE from $MIRROR (minimal=$MINIMAL)"
 
-    if [ "$ARCH" != "$(dpkg --print-architecture)" ]; then
-      echo "error: debootstrap cross-arch ($ARCH) is not supported here; use the runner's native arch." >&2
-      exit 1
+    NATIVE="$(dpkg --print-architecture)"
+    CROSS=0
+    QEMU_STATIC=""
+    if [ "$ARCH" != "$NATIVE" ]; then
+      cross_setup "$ARCH" || exit 1
     fi
 
     if suite_debootstrap "$SUITE" "$MIRROR"; then
@@ -126,11 +166,18 @@ case "$DISTRO" in
       exit 1
     }
 
+    # Cross-arch can't run foreign maintainer scripts during the first pass, so
+    # debootstrap does --foreign (download + unpack only); the chrooted scripts
+    # run afterwards under qemu. The static emulator must be inside the target
+    # for both the second stage and our own min.sh chroot.
+    BOOTSTRAP=()
+    [ "$CROSS" = 1 ] && BOOTSTRAP+=(--foreign)
+
     # debootstrap is network-heavy and can fail transiently (broken mirror
     # download, etc); retry and surface its own log so the real cause shows up.
     attempts=0
     while ! sudo env DEBOOTSTRAP_DIR="$DEBOOTSTRAP_DIR" "$DEBOOTSTRAP" \
-        --variant=minbase --components=main \
+        "${BOOTSTRAP[@]}" --variant=minbase --components=main \
         --include=ca-certificates \
         --exclude=e2fsprogs,tzdata,diffutils \
         --arch "$ARCH" "$SUITE" "$ROOTFS" "$MIRROR"; do
@@ -147,6 +194,33 @@ case "$DISTRO" in
       sudo rm -rf "$ROOTFS"
       sudo mkdir -p "$ROOTFS"
     done
+
+    if [ "$CROSS" = 1 ]; then
+      # the static emulator must be inside the target so chrooted foreign
+      # binaries (sh, dpkg, maintainer scripts) can be dispatched to qemu
+      sudo mkdir -p "$ROOTFS/usr/bin"
+      sudo cp "$QEMU_STATIC" "$ROOTFS/usr/bin/"
+      if ! sudo chroot "$ROOTFS" /bin/sh -c 'exit 0' 2>/dev/null; then
+        echo "error: cannot run $ARCH binaries inside the target (binfmt_misc not active)." >&2
+        echo 'hint: sudo mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc && sudo systemctl restart systemd-binfmt' >&2
+        exit 1
+      fi
+      # --foreign leaves the actual package configuration to the second stage
+      attempts=0
+      while ! sudo chroot "$ROOTFS" /debootstrap/debootstrap --second-stage; do
+        attempts=$((attempts + 1))
+        if [ -f "$ROOTFS/debootstrap/debootstrap.log" ]; then
+          echo "--- debootstrap.log --second-stage (attempt $attempts) ---" >&2
+          sudo tail -n 40 "$ROOTFS/debootstrap/debootstrap.log" >&2 || true
+        fi
+        if [ "$attempts" -ge 2 ]; then
+          echo "error: debootstrap --second-stage failed after $attempts attempts" >&2
+          exit 1
+        fi
+        echo "debootstrap --second-stage failed, retrying (attempt $attempts)..." >&2
+        # --second-stage resumes from its partial state on a re-run
+      done
+    fi
 
     cat > "$ROOTFS/tmp/min.sh" <<'STAGE'
 #!/bin/sh
@@ -193,11 +267,17 @@ rm -rf /var/log /var/tmp /tmp/* /run /var/backups
 rm -rf /var/cache/debconf /var/cache/ldconfig
 mkdir -p /run /var/lib/apt/lists/partial /var/cache/apt/archives/partial 2>/dev/null || true
 STAGE
-    sudo chroot "$ROOTFS" /tmp/min.sh
+    sudo env MINIMAL="$MINIMAL" chroot "$ROOTFS" /tmp/min.sh
     sudo rm -f "$ROOTFS/tmp/min.sh"
 
     sudo chroot "$ROOTFS" /bin/bash -c \
       'command -v bash && command -v openssl && [ -d /etc/ssl/certs ] && [ -f /etc/os-release ] && echo "rootfs OK: shell + openssl + CA certs present"'
+
+    if [ "$CROSS" = 1 ]; then
+      # the static emulator was only a build convenience; the final rootfs is
+      # foreign-pure and must not carry a ~20MB amd64 qemu binary
+      sudo rm -f "$ROOTFS${QEMU_STATIC}"
+    fi
 
     NAME="$DISTRO-$SUITE-$ARCH"
     ;;
@@ -205,7 +285,7 @@ STAGE
   alpine)
     case "${ALPINE_VERSION:-latest}" in
       ""|latest|stable) REL="latest-stable" ;;
-      *) REL="v$ALPINE_VERSION" ;;
+      *) REL="v${ALPINE_VERSION%.*}" ;;
     esac
 
     MANIFEST="$(curl -fsSL --retry 3 \
