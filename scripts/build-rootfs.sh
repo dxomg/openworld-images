@@ -108,7 +108,7 @@ make_img() { # $1 img path  $2 rootfs dir
 # and run it; afterwards it is removed from both artifacts.
 make_cloud_init() { # uses $DISTRO and writes $ROOTFS/tmp/cloud-init.sh
   case "$DISTRO" in
-    debian|ubuntu)
+    debian)
       cat > "$ROOTFS/tmp/cloud-init.sh" <<'CI'
 #!/bin/sh
 set -e
@@ -124,8 +124,8 @@ done
 apt-get install -y --no-install-recommends \
   systemd-sysv cloud-init dropbear ifupdown >/dev/null
 # force the NoCloud datasource and keep networking on plain ifupdown DHCP so a
-# missing netplan/seed never wedges the boot; root is never logged into via
-# ssh, users are provisioned from the seed with ssh keys
+# missing seed never wedges the boot; root is never logged into via ssh,
+# users are provisioned from the seed with ssh keys
 cat > /etc/cloud/cloud.cfg.d/99-openworld.cfg <<'EOF'
 datasource_list: [ NoCloud ]
 disable_root: true
@@ -141,6 +141,53 @@ iface lo inet loopback
 auto eth0
 iface eth0 inet dhcp
 EOF
+apt-get clean
+rm -rf /var/lib/apt/lists/*
+CI
+      ;;
+    ubuntu)
+      cat > "$ROOTFS/tmp/cloud-init.sh" <<'CI'
+#!/bin/sh
+set -e
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export DEBIAN_FRONTEND=noninteractive
+# minbase enabled only 'main'; dropbear-run lives in universe, so enable it
+# for whatever suites are configured (deb822 or legacy sources.list)
+f="$(grep -rl '^Components:.*' /etc/apt/sources.list.d/ 2>/dev/null | head -1)"
+if [ -n "$f" ]; then
+  [ "$(grep -c 'universe' "$f" || true)" -eq 0 ] && sed -i 's/^Components:.*/& universe/' "$f"
+fi
+[ ! -f /etc/apt/sources.list ] || \
+  [ "$(grep -c 'universe' /etc/apt/sources.list)" -gt 0 ] || \
+  sed -i 's/^deb \(.*\) main\( .*\)$/deb \1 main universe\2/' /etc/apt/sources.list
+i=0
+until apt-get update -qq 2>/dev/null; do
+  i=$((i + 1))
+  [ "$i" -lt 5 ] || { echo "apt-get update failed after 5 tries" >&2; exit 1; }
+  echo "apt-get update retry $i..." >&2
+  sleep "$((i * 5))"
+done
+apt-get install -y --no-install-recommends \
+  systemd-sysv cloud-init dropbear-run netplan.io >/dev/null
+# netplan renders through systemd-networkd; ensure it is enabled at boot
+systemctl enable systemd-networkd.service >/dev/null 2>&1 || true
+# NoCloud only, root ssh disabled; Ubuntu's network is netplan + systemd-networkd
+# (ifupdown is not in Ubuntu main anymore), still left out of cloud-init's hands
+cat > /etc/cloud/cloud.cfg.d/99-openworld.cfg <<'EOF'
+datasource_list: [ NoCloud ]
+disable_root: true
+ssh_pwauth: false
+network:
+  config: disabled
+EOF
+cat > /etc/netplan/99-openworld.yaml <<'EOF'
+network:
+  version: 2
+  ethernets:
+    eth0:
+      dhcp4: true
+EOF
+chmod 0600 /etc/netplan/99-openworld.yaml
 apt-get clean
 rm -rf /var/lib/apt/lists/*
 CI
