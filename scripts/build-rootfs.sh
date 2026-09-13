@@ -352,10 +352,10 @@ until apk add --no-cache openrc >/dev/null 2>&1; do
 done
 # serial console so a VM gets a login prompt
 printf 'ttyS0::respawn:/sbin/getty -L 115200 ttyS0 vt100\n' >> /etc/inittab
-# minimal early services: /dev and /sys, plus mdev as the device manager
+# minimal early services: /dev and /sys (mdev is a separate package and
+# unnecessary for booting to a serial console, devtmpfs already provides ttys)
 rc-update add devfs sysinit
 rc-update add sysfs sysinit
-rc-update add mdev sysinit
 mkdir -p /run/openrc
 touch /run/openrc/softlevel
 SETUP
