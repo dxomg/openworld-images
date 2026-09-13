@@ -149,6 +149,7 @@ EOF
 # predictably-name the first ethernet NIC `eth0` so the `auto eth0` stanza above
 # matches: systemd-udevd's predictable naming would otherwise leave QEMU/KVM
 # virtio NICs as enp1s0/etc. (ifupdown only matches by exact name)
+mkdir -p /etc/udev/rules.d
 cat > /etc/udev/rules.d/99-openworld-eth0.rules <<'EOF'
 SUBSYSTEM=="net", ACTION=="add", KERNEL!="lo|eth*", ATTR{type}=="1", NAME="eth0"
 EOF
@@ -207,6 +208,7 @@ EOF
 # predictably-name the first ethernet NIC `eth0` so the `auto eth0` stanza above
 # matches: systemd-udevd's predictable naming would otherwise leave QEMU/KVM
 # virtio NICs as enp1s0/etc. (ifupdown only matches by exact name)
+mkdir -p /etc/udev/rules.d
 cat > /etc/udev/rules.d/99-openworld-eth0.rules <<'EOF'
 SUBSYSTEM=="net", ACTION=="add", KERNEL!="lo|eth*", ATTR{type}=="1", NAME="eth0"
 EOF
