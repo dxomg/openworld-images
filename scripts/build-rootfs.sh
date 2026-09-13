@@ -50,10 +50,30 @@ print_report() {
   fi
 }
 
-# Grab the newest debootstrap straight from Debian's pool so the moment a new
-# Debian/Ubuntu codename is released it can still be bootstrapped.
+# Fetch the debootstrap package that the TARGET suite itself was validated
+# with (Debian/Ubuntu package this exact version for that release), so the
+# bootstrap stays on a tested tool even when a brand-new codename appears.
+# Running the newest package from the shared Debian pool is unsafe: that is
+# usually an unreleased (sid) build with unvalidated suite scripts.
 # debootstrap hardcodes DEBOOTSTRAP_DIR, so we point it at the extracted copy.
-latest_debootstrap() {
+suite_debootstrap() { # $1 suite  $2 mirror-base-URL
+  local suite="$1" base="$2" ver file
+  DBROOT="$(mktemp -d)"
+  local pkgs_gz="$DBROOT/Packages.gz" pkgs_raw="$DBROOT/Packages.txt"
+  curl -fsSL --retry 3 -o "$pkgs_gz" "$base/dists/$suite/main/binary-$ARCH/Packages.gz" || { sudo rm -rf "$DBROOT"; return 1; }
+  gzip -dc "$pkgs_gz" > "$pkgs_raw"
+  ver="$(awk '/^Package: debootstrap$/{f=1; next} f && /^Version:/{print $2; exit}' "$pkgs_raw")"
+  [ -n "$ver" ] || { sudo rm -rf "$DBROOT"; return 1; }
+  file="${ver//+/%2b}"
+  curl -fsSL --retry 3 -o "$DBROOT/db.deb" "$base/pool/main/d/debootstrap/debootstrap_${file}_all.deb" || { sudo rm -rf "$DBROOT"; return 1; }
+  dpkg -x "$DBROOT/db.deb" "$DBROOT"
+  DEBOOTSTRAP="$DBROOT/usr/sbin/debootstrap"
+  DEBOOTSTRAP_DIR="$DBROOT/usr/share/debootstrap"
+  scripts_dir="$DEBOOTSTRAP_DIR/scripts"
+}
+
+# Last resort: newest plain-numbered debootstrap in the shared Debian pool.
+latest_pool_debootstrap() {
   local deb
   deb="$(curl -fsSL --retry 3 https://deb.debian.org/debian/pool/main/d/debootstrap/ \
     | grep -oE 'debootstrap_[0-9.]+_all\.deb' | sort -Vu | tail -1)"
@@ -84,15 +104,20 @@ case "$DISTRO" in
       exit 1
     fi
 
-    if latest_debootstrap; then
+    if suite_debootstrap "$SUITE" "$MIRROR"; then
       DEBOOTSTRAP_VER="$(sed -n "s/^VERSION='\(.*\)'$/\1/p" "$DEBOOTSTRAP" | head -n1)"
-      echo "using debootstrap ${DEBOOTSTRAP_VER:-from the Debian pool}"
-    else
-      echo "warning: could not fetch the latest debootstrap, falling back to the system package" >&2
-      sudo apt-get install -y -qq debootstrap >/dev/null 2>&1 || true
+      echo "using debootstrap ${DEBOOTSTRAP_VER:-} (the version $SUITE ships)"
+    elif latest_pool_debootstrap; then
+      DEBOOTSTRAP_VER="$(sed -n "s/^VERSION='\(.*\)'$/\1/p" "$DEBOOTSTRAP" | head -n1)"
+      echo "warning: using debootstrap ${DEBOOTSTRAP_VER:-} from the shared Debian pool" >&2
+    elif [ -f "/usr/share/debootstrap/scripts/$SUITE" ] && command -v debootstrap >/dev/null 2>&1; then
+      echo "warning: using the system debootstrap" >&2
       DEBOOTSTRAP="$(command -v debootstrap)"
       DEBOOTSTRAP_DIR=""
       scripts_dir="/usr/share/debootstrap/scripts"
+    else
+      echo "error: could not find a debootstrap build for suite '$SUITE'" >&2
+      exit 1
     fi
 
     [ -f "$scripts_dir/$SUITE" ] || {
@@ -101,11 +126,27 @@ case "$DISTRO" in
       exit 1
     }
 
-    sudo env DEBOOTSTRAP_DIR="$DEBOOTSTRAP_DIR" "$DEBOOTSTRAP" \
-      --variant=minbase --components=main \
-      --include=ca-certificates \
-      --exclude=e2fsprogs,tzdata,diffutils \
-      --arch "$ARCH" "$SUITE" "$ROOTFS" "$MIRROR"
+    # debootstrap is network-heavy and can fail transiently (broken mirror
+    # download, etc); retry and surface its own log so the real cause shows up.
+    attempts=0
+    while ! sudo env DEBOOTSTRAP_DIR="$DEBOOTSTRAP_DIR" "$DEBOOTSTRAP" \
+        --variant=minbase --components=main \
+        --include=ca-certificates \
+        --exclude=e2fsprogs,tzdata,diffutils \
+        --arch "$ARCH" "$SUITE" "$ROOTFS" "$MIRROR"; do
+      attempts=$((attempts + 1))
+      if [ -f "$ROOTFS/debootstrap/debootstrap.log" ]; then
+        echo "--- debootstrap.log (attempt $attempts) ---" >&2
+        sudo tail -n 40 "$ROOTFS/debootstrap/debootstrap.log" >&2 || true
+      fi
+      if [ "$attempts" -ge 2 ]; then
+        echo "error: debootstrap failed after $attempts attempts" >&2
+        exit 1
+      fi
+      echo "debootstrap failed, retrying (attempt $attempts)..." >&2
+      sudo rm -rf "$ROOTFS"
+      sudo mkdir -p "$ROOTFS"
+    done
 
     cat > "$ROOTFS/tmp/min.sh" <<'STAGE'
 #!/bin/sh
