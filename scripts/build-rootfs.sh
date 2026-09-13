@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build minimal rootfs tarballs for Debian, Ubuntu and Alpine.
+# Build NoCloud cloud-init disk images (.img) for Debian, Ubuntu and Alpine.
 # Each distro always targets its latest stable release.
 #
 #   DISTRO  debian | ubuntu | alpine   ($1)
@@ -31,11 +31,6 @@ if ! command -v xz >/dev/null 2>&1 || ! command -v mkfs.ext4 >/dev/null 2>&1; th
   sudo apt-get update -qq >/dev/null 2>&1 || true
   sudo apt-get install -y -qq xz-utils e2fsprogs >/dev/null 2>&1 || true
 fi
-
-pack() { # $1 tarball  $2 rootfs dir
-  sudo tar --numeric-owner --use-compress-program='xz -9e --threads=0' \
-    -c -f "$1" -C "$2" .
-}
 
 # Project the rootfs onto a raw ext4 disk image, then shrink the filesystem
 # (resize2fs -M) so the .img is the smallest size that fits. The filesystem is
@@ -105,9 +100,9 @@ make_img() { # $1 img path  $2 rootfs dir
 }
 
 # Write a provisioning script for the .img: cloud-init is only baked into the
-# disk images (the rootfs tarballs stay bare). The script is placed in the
-# rootfs' world-writable /tmp so make_img can chroot into the mounted image
-# and run it; afterwards it is removed from both artifacts.
+# disk images. The script is placed in the rootfs' world-writable /tmp so
+# make_img can chroot into the mounted image and run it; afterwards it is
+# removed from the final image.
 make_cloud_init() { # uses $DISTRO and writes $ROOTFS/tmp/cloud-init.sh
   case "$DISTRO" in
     debian)
@@ -125,6 +120,13 @@ until apt-get update -qq 2>/dev/null; do
 done
 apt-get install -y --no-install-recommends \
   systemd-sysv cloud-init dropbear ifupdown >/dev/null
+# dropbear is the only ssh server (openssh-server is never installed, not even
+# as a dependency): disable password logins so ssh_pwauth: false holds for it
+# too, and let the package auto-start it at boot (its postinst runs
+# update-rc.d; NO_START stays 0 because no sshd is present)
+sed -i 's/^DROPBEAR_EXTRA_ARGS=.*/DROPBEAR_EXTRA_ARGS="-s"/' \
+  /etc/default/dropbear 2>/dev/null || \
+  echo 'DROPBEAR_EXTRA_ARGS="-s"' >> /etc/default/dropbear
 # force the NoCloud datasource and keep networking on plain ifupdown DHCP so a
 # missing seed never wedges the boot; root is never logged into via ssh,
 # users are provisioned from the seed with ssh keys
@@ -132,6 +134,7 @@ cat > /etc/cloud/cloud.cfg.d/99-openworld.cfg <<'EOF'
 datasource_list: [ NoCloud ]
 disable_root: true
 ssh_pwauth: false
+ssh_genkeytypes: []
 network:
   config: disabled
 EOF
@@ -177,14 +180,39 @@ until apt-get update -qq 2>/dev/null; do
 done
 apt-get install -y --no-install-recommends \
   systemd-sysv cloud-init dropbear netplan.io >/dev/null
+# A chroot-built image never runs systemd-sysusers or systemd-tmpfiles, so the
+# systemd-network/systemd-timesync system users, /var/lib/systemd and
+# /etc/systemd/network are missing. systemd-networkd (and its
+# ...-persistent-storage unit) refuse to start without them, taking DHCP with
+# them. Materialize the users/state dirs now.
+systemd-sysusers 2>/dev/null || true
+systemd-tmpfiles --create 2>/dev/null || true
+mkdir -p /etc/systemd/network
 # netplan renders through systemd-networkd; ensure it is enabled at boot
 systemctl enable systemd-networkd.service >/dev/null 2>&1 || true
+# belt and suspenders: ship a direct networkd DHCP file so eth0 comes up even
+# if netplan's boot-time generator is missing or too late (a same-prefix file
+# in /etc wins over netplan's /run copy, so this can't conflict)
+cat > /etc/systemd/network/10-eth0.network <<'EOF'
+[Match]
+Name=eth0
+
+[Network]
+DHCP=yes
+EOF
+# dropbear is the only ssh server (openssh-server is never installed): disable
+# password logins so ssh_pwauth: false holds for it too; the package's
+# postinst enables the service (update-rc.d) and NO_START stays 0 (no sshd)
+sed -i 's/^DROPBEAR_EXTRA_ARGS=.*/DROPBEAR_EXTRA_ARGS="-s"/' \
+  /etc/default/dropbear 2>/dev/null || \
+  echo 'DROPBEAR_EXTRA_ARGS="-s"' >> /etc/default/dropbear
 # NoCloud only, root ssh disabled; Ubuntu's network is netplan + systemd-networkd
 # (ifupdown is not in Ubuntu main anymore), still left out of cloud-init's hands
 cat > /etc/cloud/cloud.cfg.d/99-openworld.cfg <<'EOF'
 datasource_list: [ NoCloud ]
 disable_root: true
 ssh_pwauth: false
+ssh_genkeytypes: []
 network:
   config: disabled
 EOF
@@ -268,7 +296,8 @@ start() {
 EOF
 chmod +x /etc/init.d/cloud-init-local /etc/init.d/cloud-init \
   /etc/init.d/cloud-config /etc/init.d/cloud-final
-# dropbear is the ssh server; it ships no init script either, so write one
+# dropbear is the ssh server; it ships no init script either, so write one.
+# -s disables password logins entirely (keys only), matching ssh_pwauth: false
 cat >/etc/init.d/dropbear <<'EOF'
 #!/sbin/openrc-run
 description="Dropbear SSH server"
@@ -281,7 +310,7 @@ start() {
     /usr/bin/dropbearkey -t ed25519 -f /etc/dropbear/dropbear_ed25519_host_key 2>/dev/null
   ebegin "Starting dropbear sshd"
   start-stop-daemon --start --quiet --background --make-pidfile \
-    --pidfile /run/$RC_SVCNAME.pid --exec /usr/sbin/dropbear -- -p 22 \
+    --pidfile /run/$RC_SVCNAME.pid --exec /usr/sbin/dropbear -- -p 22 -s \
       -r /etc/dropbear/dropbear_rsa_host_key \
       -r /etc/dropbear/dropbear_ed25519_host_key
   eend $?
@@ -298,6 +327,7 @@ cat > /etc/cloud/cloud.cfg.d/99-openworld.cfg <<'EOF'
 datasource_list: [ NoCloud ]
 disable_root: true
 ssh_pwauth: false
+ssh_genkeytypes: []
 network:
   config: disabled
 EOF
@@ -622,12 +652,9 @@ SETUP
     ;;
 esac
 
-ARTIFACT="$OUT/$NAME-rootfs.tar.xz"
 IMG="$OUT/$NAME.img"
-pack "$ARTIFACT" "$ROOTFS"
 make_cloud_init
 make_img "$IMG" "$ROOTFS"
 sudo rm -f "$ROOTFS/tmp/cloud-init.sh"
-( cd "$OUT" && sha256sum "$NAME-rootfs.tar.xz" "$NAME.img" > "$NAME-SHA256SUMS" )
-report "$ARTIFACT"
+( cd "$OUT" && sha256sum "$NAME.img" > "$NAME-SHA256SUMS" )
 report "$IMG"

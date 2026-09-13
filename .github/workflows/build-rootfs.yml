@@ -24,7 +24,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: rootfs-${{ github.ref }}
+  group: cloudimg-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -76,7 +76,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build rootfs (latest stable)
+      - name: Build cloud image (latest stable)
         env:
           ARCH: ${{ matrix.arch }}
         run: bash scripts/build-rootfs.sh "${{ matrix.name }}"
@@ -84,7 +84,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: rootfs-${{ matrix.name }}-${{ matrix.arch }}
+          name: cloudimg-${{ matrix.name }}-${{ matrix.arch }}
           path: dist/
           if-no-files-found: error
           compression-level: 0
@@ -108,7 +108,7 @@ jobs:
           cd artifacts
           cat *-SHA256SUMS > SHA256SUMS
           gh release create "$GITHUB_REF_NAME" \
-            *.tar.xz *.img SHA256SUMS \
+            *.img SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
             --title "$GITHUB_REF_NAME" \
-            --notes "Minimal rootfs tarballs plus NoCloud cloud-init disk images (.img) for the latest Debian / Ubuntu / Alpine stable. Images boot with dropbear sshd; provision users/ssh keys via user-data."
+            --notes "NoCloud cloud-init disk images (.img) for the latest Debian / Ubuntu / Alpine stable. Each image boots with dropbear as its SSH server (no OpenSSH, key-only logins); provision users and SSH keys via user-data."
