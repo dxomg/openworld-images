@@ -47,7 +47,8 @@ make_img() { # $1 img path  $2 rootfs dir
   local used blocks mnt
   used="$(sudo du -sB 4096 "$root" | cut -f1)"
   # 12% headroom for ext4 metadata; resize2fs -M reclaims everything unused
-  blocks=$(( (used * 112 / 100 + 4095) / 4096 ))
+  # (du -sB 4096 already counts in 4k blocks, so no extra rounding needed)
+  blocks=$(( used * 112 / 100 ))
   # 64 MiB floor keeps the filesystem sane for tiny rootfs builds
   [ "$blocks" -ge 16384 ] || blocks=16384
   truncate -s $((blocks * 4096)) "$img"
@@ -264,6 +265,11 @@ find /usr/share/zoneinfo -mindepth 1 ! -path '/usr/share/zoneinfo/Etc*' -exec rm
 
 rm -rf /var/log /var/tmp /tmp/* /run /var/backups
 rm -rf /var/cache/debconf /var/cache/ldconfig
+# the .deb payload debootstrap unpacked is dead weight now; dropping it
+# (and the package indexes, which `apt-get update` regenerates) slims both
+# the tarball and the disk image
+rm -f /var/cache/apt/archives/*.deb
+rm -rf /var/lib/apt/lists/*
 mkdir -p /run /var/lib/apt/lists/partial /var/cache/apt/archives/partial /var/log/apt
 STAGE
     # the file is owned by the (unprivileged) runner user with mode 0644, so
