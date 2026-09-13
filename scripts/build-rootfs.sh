@@ -145,6 +145,10 @@ iface eth0 inet dhcp
 EOF
 apt-get clean
 rm -rf /var/lib/apt/lists/*
+# newly installed packages brought their own docs/locales/zone-data back
+rm -rf /usr/share/doc /usr/share/man /usr/share/info /usr/share/lintian /usr/share/bug
+find /usr/share/locale -mindepth 1 -maxdepth 1 ! -name en -exec rm -rf {} + 2>/dev/null || true
+find /usr/share/zoneinfo -mindepth 1 ! -path '/usr/share/zoneinfo/Etc*' -exec rm -rf {} + 2>/dev/null || true
 CI
       ;;
     ubuntu)
@@ -194,6 +198,10 @@ EOF
 chmod 0600 /etc/netplan/99-openworld.yaml
 apt-get clean
 rm -rf /var/lib/apt/lists/*
+# newly installed packages brought their own docs/locales/zone-data back
+rm -rf /usr/share/doc /usr/share/man /usr/share/info /usr/share/lintian /usr/share/bug
+find /usr/share/locale -mindepth 1 -maxdepth 1 ! -name en -exec rm -rf {} + 2>/dev/null || true
+find /usr/share/zoneinfo -mindepth 1 ! -path '/usr/share/zoneinfo/Etc*' -exec rm -rf {} + 2>/dev/null || true
 CI
       ;;
     alpine)
