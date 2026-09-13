@@ -330,11 +330,26 @@ PY
     if [ "$AARCH" != "$(uname -m)" ]; then
       qemu_bootstrap "$ARCH"
     fi
+    # the minirootfs has no resolv.conf, which makes DNS inside the (possibly
+    # qemu-emulated) chroot flaky; borrow the host's for the install step only
+    sudo cp /etc/resolv.conf "$ROOTFS/etc/resolv.conf" 2>/dev/null || true
     cat > "$ROOTFS/tmp/setup.sh" <<'SETUP'
 #!/bin/sh
 set -e
-apk update >/dev/null
-apk add --no-cache openrc >/dev/null
+i=0
+until apk update >/dev/null 2>&1; do
+  i=$((i + 1))
+  [ "$i" -lt 5 ] || { echo "apk update failed after 5 tries" >&2; exit 1; }
+  echo "apk update retry $i..." >&2
+  sleep "$((i * 5))"
+done
+i=0
+until apk add --no-cache openrc >/dev/null 2>&1; do
+  i=$((i + 1))
+  [ "$i" -lt 5 ] || { echo "apk add openrc failed after 5 tries" >&2; exit 1; }
+  echo "apk add openrc retry $i..." >&2
+  sleep "$((i * 5))"
+done
 # serial console so a VM gets a login prompt
 printf 'ttyS0::respawn:/sbin/getty -L 115200 ttyS0 vt100\n' >> /etc/inittab
 # minimal early services: /dev and /sys, plus mdev as the device manager
@@ -345,7 +360,7 @@ mkdir -p /run/openrc
 touch /run/openrc/softlevel
 SETUP
     sudo chroot "$ROOTFS" /bin/sh /tmp/setup.sh
-    sudo rm -f "$ROOTFS/tmp/setup.sh"
+    sudo rm -f "$ROOTFS/tmp/setup.sh" "$ROOTFS/etc/resolv.conf"
 
     sudo rm -rf "$ROOTFS/var/cache/apk"/* "$ROOTFS/var/log" \
       "$ROOTFS/usr/share/doc" "$ROOTFS/usr/share/man" "$ROOTFS/usr/share/info"
