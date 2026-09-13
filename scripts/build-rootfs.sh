@@ -151,15 +151,17 @@ CI
 set -e
 export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 export DEBIAN_FRONTEND=noninteractive
-# enabled only 'main'; dropbear lives in universe, so enable it
-# for whatever suites are configured (deb822 or legacy sources.list)
-f="$(grep -rl '^Components:.*' /etc/apt/sources.list.d/ 2>/dev/null | head -1)"
-if [ -n "$f" ]; then
-  [ "$(grep -c 'universe' "$f" || true)" -eq 0 ] && sed -i 's/^Components:.*/& universe/' "$f"
-fi
-[ ! -f /etc/apt/sources.list ] || \
-  [ "$(grep -c 'universe' /etc/apt/sources.list)" -gt 0 ] || \
-  sed -i 's/^deb \(.*\) main\( .*\)$/deb \1 main universe\2/' /etc/apt/sources.list
+# enabled only 'main'; dropbear lives in universe. Rather than parse whatever
+# sources format debootstrap produced, add a clean deb822 stanza for the base
+# suite (avoids -updates/-security 404s on devel codenames)
+_CODENAME="$(sed -n 's/^VERSION_CODENAME=//p' /etc/os-release)"
+[ -n "$_CODENAME" ] || _CODENAME="$(sed -n 's/^UBUNTU_CODENAME=//p' /etc/os-release)"
+cat > /etc/apt/sources.list.d/99-openworld-universe.sources <<EOF
+Types: deb
+URIs: http://archive.ubuntu.com/ubuntu
+Suites: $_CODENAME
+Components: universe
+EOF
 i=0
 until apt-get update -qq 2>/dev/null; do
   i=$((i + 1))
