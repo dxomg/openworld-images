@@ -162,42 +162,48 @@ case "$DISTRO" in
     # afterwards (via the qemu emulator for cross-arch). Keeps one code path
     # for native and foreign builds and fails early and clearly on emulation
     # problems instead of mid-install.
+    #
+    # minbase pulls in everything dpkg needs (diffutils and tzdata are
+    # Priority: required, so they must NOT be excluded or dpkg's own sanity
+    # check aborts with "expected program not found in PATH"). Only the
+    # "important" e2fsprogs is excluded, and the tzdata payload is trimmed in
+    # slim.sh instead of the package being removed.
     attempts=0
-    while ! sudo env DEBOOTSTRAP_DIR="$DEBOOTSTRAP_DIR" "$DEBOOTSTRAP" \
-        --foreign --variant=minbase --components=main \
-        --include=ca-certificates \
-        --exclude=e2fsprogs,tzdata,diffutils \
-        --arch "$ARCH" "$SUITE" "$ROOTFS" "$MIRROR"; do
+    while :; do
       attempts=$((attempts + 1))
+      if sudo env DEBOOTSTRAP_DIR="$DEBOOTSTRAP_DIR" "$DEBOOTSTRAP" \
+          --foreign --variant=minbase --components=main \
+          --include=ca-certificates \
+          --exclude=e2fsprogs \
+          --arch "$ARCH" "$SUITE" "$ROOTFS" "$MIRROR"; then
+
+        if [ "$CROSS" = 1 ]; then
+          # the unpacked packages are foreign ELF binaries; prove binfmt/qemu
+          # can run them before the long second stage
+          if ! sudo chroot "$ROOTFS" /bin/sh -c 'exit 0' 2>/dev/null; then
+            echo "error: cannot execute $ARCH binaries (binfmt_misc/qemu not active)." >&2
+            echo 'hint: sudo mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc && sudo systemctl restart systemd-binfmt' >&2
+            exit 1
+          fi
+        fi
+
+        if sudo chroot "$ROOTFS" /debootstrap/debootstrap --second-stage; then
+          break
+        fi
+        echo "debootstrap --second-stage failed (attempt $attempts)..." >&2
+      else
+        echo "debootstrap first stage failed (attempt $attempts)..." >&2
+      fi
       surf_log "$ROOTFS"
       if [ "$attempts" -ge 2 ]; then
         echo "error: debootstrap failed after $attempts attempts" >&2
         exit 1
       fi
-      echo "debootstrap failed, retrying (attempt $attempts)..." >&2
+      # second stage leaves dpkg/status half-written; retrying it in place
+      # only corrupts it further, so start both stages from a clean target
+      echo "retrying debootstrap from scratch (attempt $((attempts + 1)))..." >&2
       sudo rm -rf "$ROOTFS"
       sudo mkdir -p "$ROOTFS"
-    done
-
-    if [ "$CROSS" = 1 ]; then
-      # the unpacked packages are foreign ELF binaries; prove binfmt/qemu
-      # can run them before the long second stage
-      if ! sudo chroot "$ROOTFS" /bin/sh -c 'exit 0' 2>/dev/null; then
-        echo "error: cannot execute $ARCH binaries (binfmt_misc/qemu not active)." >&2
-        echo 'hint: sudo mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc && sudo systemctl restart systemd-binfmt' >&2
-        exit 1
-      fi
-    fi
-
-    attempts=0
-    while ! sudo chroot "$ROOTFS" /debootstrap/debootstrap --second-stage; do
-      attempts=$((attempts + 1))
-      surf_log "$ROOTFS"
-      if [ "$attempts" -ge 2 ]; then
-        echo "error: debootstrap --second-stage failed after $attempts attempts" >&2
-        exit 1
-      fi
-      echo "debootstrap --second-stage failed, retrying (attempt $attempts)..." >&2
     done
     sudo rm -rf "$ROOTFS/debootstrap"
 
@@ -212,8 +218,9 @@ printf 'APT::Get::Install-Recommends "false";\nAPT::Get::Install-Suggests "false
 printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d
 chmod 0755 /usr/sbin/policy-rc.d
 
-# debootstrap excluded these, but purge anyway in case a dependency won them back
-dpkg --force-all --purge e2fsprogs tzdata diffutils 2>/dev/null || true
+# e2fsprogs is the one thing a container never needs; tzdata and diffutils
+# are intentionally kept (installed, slimmed) so dpkg/apt still work
+dpkg --force-all --purge e2fsprogs 2>/dev/null || true
 
 # docs, man/info pages and almost all locale/zone data are dead weight
 rm -rf /usr/share/doc /usr/share/man /usr/share/info \
