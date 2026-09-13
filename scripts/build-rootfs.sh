@@ -58,7 +58,7 @@ fi
 
 # the container is never started; export its (flattened) rootfs directly
 cid="$(docker create "$TAG" /bin/true)"
-docker export "$cid" | sudo tar -xzf - -C "$ROOTFS"
+docker export "$cid" | sudo tar -xf - -C "$ROOTFS"
 docker rm -f "$cid" >/dev/null 2>&1 || true
 
 # docker plants its runtime /etc/{hostname,hosts,resolv.conf} into the export;
