@@ -1,0 +1,115 @@
+name: build-rootfs
+
+on:
+  workflow_dispatch:
+    inputs:
+      distros:
+        description: "Comma-separated distros to build (debian, ubuntu, alpine). Blank = all."
+        required: false
+        default: ""
+      suite:
+        description: "Override Debian/Ubuntu codename (e.g. bookworm, noble). Blank = latest stable."
+        required: false
+        default: ""
+      alpine_version:
+        description: "Override Alpine major.minor (e.g. 3.20). Blank = latest stable."
+        required: false
+        default: ""
+      minimal:
+        description: "Debian/Ubuntu slim level. Slim (default) = keeps apt/dpkg, usable. bare = no package manager, absolute smallest."
+        required: false
+        default: "slim"
+      arch:
+        description: "Target architecture (amd64, arm64, ...). Only alpine supports cross-arch."
+        required: false
+        default: "amd64"
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-rootfs.yml"
+      - "scripts/**"
+  schedule:
+    - cron: "0 3 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rootfs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  select:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.gen.outputs.matrix }}
+    steps:
+      - name: Compute distro matrix
+        id: gen
+        env:
+          INPUT: ${{ inputs.distros }}
+        run: |
+          names="debian ubuntu alpine"
+          if [ -n "$INPUT" ]; then
+            names="$(printf '%s' "$INPUT" | tr ',' ' ' | xargs -n1 | sort -u | tr '\n' ' ')"
+          fi
+          json="["
+          for n in $names; do
+            case "$n" in
+              debian|ubuntu|alpine) json="${json}{\"name\":\"$n\"}," ;;
+            esac
+          done
+          json="${json%,}]"
+          echo "matrix=$json" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: select
+    if: needs.select.outputs.matrix != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.select.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build minimal rootfs (latest stable)
+        env:
+          SUITE: ${{ inputs.suite }}
+          ALPINE_VERSION: ${{ inputs.alpine_version }}
+          MINIMAL: ${{ inputs.minimal }}
+          ARCH: ${{ inputs.arch }}
+        run: bash scripts/build-rootfs.sh "${{ matrix.name }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rootfs-${{ matrix.name }}
+          path: dist/
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd artifacts
+          cat *-SHA256SUMS > SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" \
+            *.tar.xz SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Minimal rootfs tarballs for the latest Debian / Ubuntu / Alpine stable."
