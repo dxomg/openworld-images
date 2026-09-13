@@ -69,19 +69,21 @@ make_img() { # $1 img path  $2 rootfs dir
     # package maintainer scripts expect /proc,/sys,/dev (debootstrap mounts
     # them during its own second stage); hand the fresh image the host's so
     # the cloud-init install behaves. The minirootfs also has no resolv.conf.
-    sudo mkdir -p "$mnt/proc" "$mnt/sys" "$mnt/dev"
+    sudo mkdir -p "$mnt/proc" "$mnt/sys" "$mnt/dev" "$mnt/dev/pts"
+    sudo chown root:root "$mnt" "$mnt/dev" "$mnt/dev/pts"
     sudo mount --bind /proc "$mnt/proc"
     sudo mount --bind /sys "$mnt/sys"
     sudo mount --bind /dev "$mnt/dev"
+    sudo mount --bind /dev/pts "$mnt/dev/pts"
     sudo cp /etc/resolv.conf "$mnt/etc/resolv.conf" 2>/dev/null || true
     if ! sudo chroot "$mnt" /bin/sh /tmp/cloud-init.sh; then
       echo "error: cloud-init provisioning failed inside $img" >&2
-      sudo umount "$mnt/dev" "$mnt/sys" "$mnt/proc" 2>/dev/null || true
+      sudo umount "$mnt/dev/pts" "$mnt/dev" "$mnt/sys" "$mnt/proc" 2>/dev/null || true
       sudo umount "$mnt" 2>/dev/null || true
       sudo rmdir "$mnt" 2>/dev/null || true
       exit 1
     fi
-    sudo umount "$mnt/dev" "$mnt/sys" "$mnt/proc"
+    sudo umount "$mnt/dev/pts" "$mnt/dev" "$mnt/sys" "$mnt/proc"
     # don't ship the build host's network config or the setup script
     sudo rm -f "$mnt/etc/resolv.conf" "$mnt/tmp/cloud-init.sh"
   fi
