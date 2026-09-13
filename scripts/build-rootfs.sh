@@ -101,7 +101,7 @@ case "$DISTRO" in
       exit 1
     }
 
-    sudo env DEBOOTSTRAP_DIR="$DEBOOTSTRAP_DIR" "$DEBOOTSTRAP" --quiet \
+    sudo env DEBOOTSTRAP_DIR="$DEBOOTSTRAP_DIR" "$DEBOOTSTRAP" \
       --variant=minbase --components=main \
       --include=ca-certificates \
       --exclude=e2fsprogs,tzdata,diffutils \
