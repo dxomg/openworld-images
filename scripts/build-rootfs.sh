@@ -232,7 +232,9 @@ rm -rf /var/log /var/tmp /tmp/* /run /var/backups
 rm -rf /var/cache/debconf /var/cache/ldconfig
 mkdir -p /run /var/lib/apt/lists/partial /var/cache/apt/archives/partial /var/log/apt
 STAGE
-    sudo chroot "$ROOTFS" /tmp/slim.sh
+    # the file is owned by the (unprivileged) runner user with mode 0644, so
+    # chroot cannot exec it directly; hand it to the target's /bin/sh instead
+    sudo chroot "$ROOTFS" /bin/sh /tmp/slim.sh
     sudo rm -f "$ROOTFS/tmp/slim.sh"
 
     sudo chroot "$ROOTFS" /bin/bash -c \
