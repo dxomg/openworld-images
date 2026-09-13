@@ -7,22 +7,10 @@ on:
         description: "Comma-separated distros to build (debian, ubuntu, alpine). Blank = all."
         required: false
         default: ""
-      suite:
-        description: "Override Debian/Ubuntu codename (e.g. bookworm, noble). Blank = latest stable."
-        required: false
-        default: ""
-      alpine_version:
-        description: "Override Alpine major.minor (e.g. 3.20). Blank = latest stable."
-        required: false
-        default: ""
-      minimal:
-        description: "Debian/Ubuntu slim level. Slim (default) = keeps apt/dpkg, usable. bare = no package manager, absolute smallest."
-        required: false
-        default: "slim"
       archs:
-        description: "Comma-separated target architectures (amd64, arm64, armhf, ...). Debian/Ubuntu are cross-built via qemu-user-static; alpine is multi-arch."
+        description: "Comma-separated architectures (amd64, arm64, ...). Blank = amd64,arm64."
         required: false
-        default: "amd64,arm64"
+        default: ""
   push:
     branches: [main]
     tags: ['*']
@@ -45,7 +33,7 @@ jobs:
     outputs:
       matrix: ${{ steps.gen.outputs.matrix }}
     steps:
-      - name: Compute distro matrix
+      - name: Compute distro x arch matrix
         id: gen
         env:
           INPUT: ${{ inputs.distros }}
@@ -88,11 +76,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build minimal rootfs (latest stable)
+      - name: Build rootfs (latest stable)
         env:
-          SUITE: ${{ inputs.suite }}
-          ALPINE_VERSION: ${{ inputs.alpine_version }}
-          MINIMAL: ${{ inputs.minimal }}
           ARCH: ${{ matrix.arch }}
         run: bash scripts/build-rootfs.sh "${{ matrix.name }}"
 
