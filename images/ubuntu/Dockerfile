@@ -57,6 +57,38 @@ RUN set -e \
        || echo 'DROPBEAR_EXTRA_ARGS="-s"' >> /etc/default/dropbear; } \
   && rm -rf /usr/share/doc /usr/share/man /usr/share/info /usr/share/lintian /usr/share/bug
 
+# -- microVM slimming: fixed hardware + immutable image, so the udev hwdb
+# (device property DB), journal catalogs, locale data and most terminfo entries
+# are dead weight. Core systemd is one multi-call binary, so only the unused
+# tool symlinks (systemd-analyze, coredump, sleep, hwdb) go - nothing a boot
+# unit invokes.
+RUN set -e \
+  && rm -f /usr/bin/systemd-analyze /usr/lib/systemd/systemd-analyze \
+          /usr/bin/systemd-hwdb /usr/lib/systemd/systemd-hwdb \
+          /usr/lib/systemd/systemd-coredump /usr/bin/coredumpctl \
+          /usr/lib/systemd/systemd-sleep \
+  && rm -rf /usr/lib/systemd/catalog \
+  && rm -rf /usr/lib/udev/hwdb.d \
+  && rm -f /usr/lib/udev/hwdb.bin /lib/udev/hwdb.bin \
+          /usr/share/udev/hwdb.bin /etc/udev/hwdb.bin \
+  && rm -rf /usr/share/locale /usr/lib/locale \
+  && mkdir -p /tmp/keep/terminfo \
+  && for d in /usr/share/terminfo /usr/lib/terminfo /lib/terminfo /etc/terminfo; do \
+       [ -d "$d" ] || continue; \
+       for e in x/xterm x/xterm-256color l/linux v/vt100 v/vt220 d/dumb s/screen a/ansi; do \
+         [ -f "$d/$e" ] || continue; \
+         mkdir -p "/tmp/keep/terminfo/$(dirname "$e")"; \
+         cp -a "$d/$e" "/tmp/keep/terminfo/$e"; \
+       done; \
+     done \
+  && rm -rf /usr/share/terminfo /usr/lib/terminfo /lib/terminfo /etc/terminfo \
+  && mkdir -p /usr/share/terminfo \
+  && cp -a /tmp/keep/terminfo/. /usr/share/terminfo/ \
+  && rm -rf /tmp/keep \
+  && ln -sf /dev/null /etc/systemd/system/systemd-hwdb-update.service \
+  && ln -sf /dev/null /etc/systemd/system/systemd-coredump.socket \
+  && ln -sf /dev/null /etc/systemd/system/systemd-coredump.service
+
 # Optional: set a root password so the console/login works. Without it root
 # stays password-locked (the intended key-only dropbear setup).
 ARG OPENWORLD_ROOTPW=
