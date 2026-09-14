@@ -15,10 +15,15 @@ RUN set -e \
 # postinst leaves NO_START=0 so its service is enabled at boot; -s enforces
 # key-only logins. Best-effort systemd-sysusers/systemd-tmpfiles here so the
 # exported rootfs is consistent (systemd redoes it at first boot anyway).
+# Serial getty (from a console=ttyS0 cmdline) BindsTo dev-ttyS0.device; cap
+# that job's timeout so a delayed/missing ttyS0 stalls boot ~20s at most.
 RUN set -e \
   && { systemd-sysusers 2>/dev/null || true; } \
   && { systemd-tmpfiles --create 2>/dev/null || true; } \
-  && mkdir -p /etc/network /etc/udev/rules.d
+  && mkdir -p /etc/network /etc/udev/rules.d \
+  && mkdir -p /etc/systemd/system/dev-ttyS0.device.d \
+  && printf '[Unit]\nJobRunningTimeoutSec=20s\n' \
+       > /etc/systemd/system/dev-ttyS0.device.d/timeout.conf
 
 COPY interfaces /etc/network/interfaces
 COPY 99-openworld-eth0.rules /etc/udev/rules.d/99-openworld-eth0.rules

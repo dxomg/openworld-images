@@ -21,11 +21,17 @@ RUN set -e \
   && rm -rf /var/lib/apt/lists/*
 
 # Materialize system users/state dirs best-effort (systemd's own
-# systemd-sysusers/systemd-tmpfiles units redo it at first boot anyway).
+# systemd-sysusers/systemd-tmpfiles units redo it at first boot anyway), and
+# cap the dev-ttyS0.device job timeout: serial-getty@ttyS0 (from a
+# console=ttyS0 cmdline) BindsTo=dev-ttyS0.device, which otherwise stalls the
+# boot for the default 90s when udev does not publish ttyS0 promptly.
 RUN set -e \
   && { systemd-sysusers 2>/dev/null || true; } \
   && { systemd-tmpfiles --create 2>/dev/null || true; } \
-  && mkdir -p /etc/network /etc/udev/rules.d
+  && mkdir -p /etc/network /etc/udev/rules.d \
+  && mkdir -p /etc/systemd/system/dev-ttyS0.device.d \
+  && printf '[Unit]\nJobRunningTimeoutSec=20s\n' \
+       > /etc/systemd/system/dev-ttyS0.device.d/timeout.conf
 
 COPY interfaces /etc/network/interfaces
 COPY 99-openworld-eth0.rules /etc/udev/rules.d/99-openworld-eth0.rules
