@@ -111,7 +111,7 @@ jobs:
 
   release:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/')
+    if: needs.build.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -127,8 +127,16 @@ jobs:
         run: |
           cd artifacts
           cat *-SHA256SUMS > SHA256SUMS
-          gh release create "$GITHUB_REF_NAME" \
-            *.img SHA256SUMS \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "$GITHUB_REF_NAME" \
-            --notes "Bootable ext4 disk images (.img) for the latest Debian / Ubuntu / Alpine stable, built from Docker base images (no cloud-init). Each image boots with dropbear as its SSH server (no OpenSSH, key-only logins); pass the ssh_pubkey input at dispatch time to bake a public key into the 'openworld' user's authorized_keys."
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            REL="${GITHUB_REF#refs/tags/}"
+            gh release create "$REL" *.img SHA256SUMS --repo "$GITHUB_REPOSITORY" \
+              --title "$REL" --verify-tag \
+              --notes "Bootable ext4 disk images (.img) for the latest Debian / Ubuntu / Alpine stable, built from Docker base images (no cloud-init). Key-only dropbear; pass the ssh_pubkey input to bake a public key into the 'openworld' user."
+          else
+            REL="openworld-images"
+            gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+              && gh release delete "$REL" --yes --cleanup-tag --repo "$GITHUB_REPOSITORY"
+            gh release create "$REL" *.img SHA256SUMS --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --title "openworld-images (rolling)" \
+              --notes "Latest build from a push or the weekly schedule. Bootable ext4 disk images (.img) for the latest Debian / Ubuntu / Alpine stable, built from Docker base images (no cloud-init). Key-only dropbear; pass the ssh_pubkey input at dispatch time to bake a public key into the 'openworld' user's authorized_keys."
+          fi
