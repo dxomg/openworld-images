@@ -1,0 +1,30 @@
+# Provide a login on ttyS0 (Firecracker/qemu serial console) WITHOUT relying on
+# dev-ttyS0.device: the stock serial-getty@ttyS0 (from the kernel console=
+# getty-generator) BindsTo dev-ttyS0.device, whose unit never activates in
+# microVMs, so its job times out and the getty fails. This unit instead checks
+# the actual node via ConditionPathExists (no device-unit dependency): the
+# console works whenever /dev/ttyS0 exists and is skipped instantly otherwise.
+[Unit]
+Description=Openworld serial console login on ttyS0
+Documentation=man:agetty(8)
+After=systemd-user-sessions.service plymouth-quit-wait.service
+Before=getty.target
+IgnoreOnIsolate=yes
+ConditionPathExists=/dev/ttyS0
+
+[Service]
+ExecStart=-/sbin/agetty -s ttyS0 115200,38400,9600
+Type=idle
+Restart=always
+RestartSec=0
+UtmpIdentifier=ttyS0
+TTYPath=/dev/ttyS0
+TTYReset=yes
+TTYVHangup=yes
+KillMode=mixed
+IgnoreSIGPIPE=yes
+SendSIGHUP=yes
+UnsetEnvironment=TERM
+
+[Install]
+WantedBy=getty.target

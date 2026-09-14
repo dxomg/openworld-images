@@ -21,24 +21,29 @@ RUN set -e \
   && rm -rf /var/lib/apt/lists/*
 
 # Materialize system users/state dirs best-effort (systemd's own
-# systemd-sysusers/systemd-tmpfiles units redo it at first boot anyway), and
-# enable systemd-udevd explicitly: a Docker-exported rootfs may miss the
-# postinst's enablement. The serial console stays enabled - udevd is what
-# activates dev-*.device units (incl. dev-ttyS0, which the serial getty after
-# console=ttyS0 BindsTo) and applies the eth0 rename rule. When the VM has no
-# ttyS0 the device job is capped at 20s so the boot still proceeds instead of
-# stalling the default 90s.
+# systemd-sysusers/systemd-tmpfiles units redo it at first boot anyway). The
+# serial console is provided by openworld-serial-console.service (a plain
+# agetty on ttyS0 gated by ConditionPathExists, with NO dev-*.device unit
+# dependency - Docker-exported rootfs device units are unreliable in microVMs,
+# which is exactly why the stock serial-getty@ttyS0 stalls at an unwaitable
+# dev-ttyS0.device job). That generated unit is therefore masked. systemd-udevd
+# is explicitly tied to sysinit.target (the package postinst may not have
+# enabled it in a Docker build) because udev applies the eth0 rename rule and
+# manages the other devices.
 RUN set -e \
   && { systemd-sysusers 2>/dev/null || true; } \
   && { systemd-tmpfiles --create 2>/dev/null || true; } \
-  && { systemctl enable systemd-udevd.service 2>/dev/null || true; } \
   && mkdir -p /etc/network /etc/udev/rules.d \
-  && mkdir -p /etc/systemd/system/dev-ttyS0.device.d \
-  && printf '[Unit]\nJobRunningTimeoutSec=20s\n' \
-       > /etc/systemd/system/dev-ttyS0.device.d/timeout.conf
+  && mkdir -p /etc/systemd/system/sysinit.target.wants /etc/systemd/system/getty.target.wants \
+  && ln -sfn /usr/lib/systemd/system/systemd-udevd.service \
+       /etc/systemd/system/sysinit.target.wants/systemd-udevd.service \
+  && ln -sfn /usr/lib/systemd/system/openworld-serial-console.service \
+       /etc/systemd/system/getty.target.wants/openworld-serial-console.service \
+  && ln -sf /dev/null /etc/systemd/system/serial-getty@ttyS0.service
 
 COPY interfaces /etc/network/interfaces
 COPY 99-openworld-eth0.rules /etc/udev/rules.d/99-openworld-eth0.rules
+COPY openworld-serial-console.service /usr/lib/systemd/system/openworld-serial-console.service
 
 # dropbear is the only ssh server (openssh-server is never installed): the
 # postinst leaves NO_START=0 so its service is enabled at boot; -s enforces
