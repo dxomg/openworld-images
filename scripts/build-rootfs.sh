@@ -12,12 +12,14 @@
 # shrunk to its exact minimum (resize2fs -M, no journal, no reserved blocks).
 #
 # A public SSH key may be baked into the images by setting OPENWORLD_PUBKEY;
-# without it the images still boot but have no ssh-configured account.
+# without it the images still boot but have no ssh-configured account. A root
+# password may be set with OPENWORLD_ROOTPW.
 set -euo pipefail
 
 DISTRO="${1:?usage: build-rootfs.sh <debian|ubuntu|alpine>}"
 ARCH="${ARCH:-amd64}"
 PUBKEY="${OPENWORLD_PUBKEY:-}"
+ROOTPW="${OPENWORLD_ROOTPW:-}"
 
 OUT="dist"
 ROOTFS="$(mktemp -d)"
@@ -47,10 +49,14 @@ echo "building rootfs for $DISTRO ($ARCH) from $BLDDIR"
 if docker buildx version >/dev/null 2>&1; then
   args=(buildx build --platform "linux/$ARCH" --load -t "$TAG" -f "$BLDDIR/Dockerfile" "$BLDDIR")
   [ -n "$PUBKEY" ] && args+=(--build-arg "OPENWORLD_PUBKEY=$PUBKEY")
+  [ -n "$ROOTPW" ] && args+=(--build-arg "OPENWORLD_ROOTPW=$ROOTPW")
   docker "${args[@]}"
 elif [ "$ARCH" = "$(uname -m)" ]; then
   # no buildx: native builds can still use the classic builder
-  docker build -t "$TAG" --build-arg "OPENWORLD_PUBKEY=$PUBKEY" -f "$BLDDIR/Dockerfile" "$BLDDIR"
+  docker build -t "$TAG" \
+    --build-arg "OPENWORLD_PUBKEY=$PUBKEY" \
+    --build-arg "OPENWORLD_ROOTPW=$ROOTPW" \
+    -f "$BLDDIR/Dockerfile" "$BLDDIR"
 else
   echo "error: cross-arch ($ARCH) builds need buildx (docker buildx version fails)" >&2
   exit 1

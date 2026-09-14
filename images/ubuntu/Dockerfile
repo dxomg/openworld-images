@@ -57,6 +57,15 @@ RUN set -e \
        || echo 'DROPBEAR_EXTRA_ARGS="-s"' >> /etc/default/dropbear; } \
   && rm -rf /usr/share/doc /usr/share/man /usr/share/info /usr/share/lintian /usr/share/bug
 
+# Optional: set a root password so the console/login works. Without it root
+# stays password-locked (the intended key-only dropbear setup).
+ARG OPENWORLD_ROOTPW=
+RUN if [ -n "$OPENWORLD_ROOTPW" ]; then \
+      printf 'root:%s\n' "$OPENWORLD_ROOTPW" | chpasswd; \
+    else \
+      echo "note: OPENWORLD_ROOTPW not set; root stays password-locked"; \
+    fi
+
 # Optional access: bake a public key into the "openworld" user.
 ARG OPENWORLD_PUBKEY=
 RUN set -e \

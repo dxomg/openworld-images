@@ -1,0 +1,135 @@
+# Same as build-images.yml but pre-sets a root password on every image:
+# dispatch with root_password (default "root:root") to bake it in, so the
+# console/serial login can be used instead of (or in addition to) key-only
+# dropbear. Manual dispatch only (no push/schedule) so this never duplicately
+# rebuilds on images/** pushes.
+name: build-images-rootpw
+
+on:
+  workflow_dispatch:
+    inputs:
+      distros:
+        description: "Comma-separated distros to build (debian, ubuntu, alpine). Blank = all."
+        required: false
+        default: ""
+      archs:
+        description: "Comma-separated architectures (amd64, arm64, ...). Blank = amd64,arm64."
+        required: false
+        default: ""
+      ssh_pubkey:
+        description: "Public ssh key (one line) to bake into the 'openworld' user so the images accept key ssh login."
+        required: false
+        default: ""
+      root_password:
+        description: "Password for the root account, baked into every image (pre-set to 'root')."
+        required: false
+        default: "root"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cloudimg-rootpw-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  select:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.gen.outputs.matrix }}
+    steps:
+      - name: Compute distro x arch matrix
+        id: gen
+        env:
+          INPUT: ${{ inputs.distros }}
+          ARCHES: ${{ inputs.archs }}
+        run: |
+          names="debian ubuntu alpine"
+          if [ -n "$INPUT" ]; then
+            names="$(printf '%s' "$INPUT" | tr ',' ' ' | xargs -n1 | sort -u | tr '\n' ' ')"
+          fi
+          arches="amd64 arm64"
+          if [ -n "$ARCHES" ]; then
+            arches="$(printf '%s' "$ARCHES" | tr ',' ' ' | xargs -n1 | sort -u | tr '\n' ' ')"
+          fi
+          json="["
+          for n in $names; do
+            case "$n" in
+              debian|ubuntu|alpine) ;;
+              *) continue ;;
+            esac
+            for a in $arches; do
+              case "$a" in
+                amd64|i386|arm64|armhf|armel|riscv64|s390x|ppc64el) ;;
+                *) continue ;;
+              esac
+              json="${json}{\"name\":\"$n\",\"arch\":\"$a\"},"
+            done
+          done
+          json="${json%,}]"
+          echo "matrix=$json" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: select
+    if: needs.select.outputs.matrix != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.select.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start docker daemon
+        run: |
+          docker info >/dev/null 2>&1 || sudo service docker start >/dev/null 2>&1 || true
+          for i in $(seq 1 10); do
+            docker info >/dev/null 2>&1 && exit 0
+            sleep 3
+          done
+          echo "docker daemon did not come up" >&2
+          exit 1
+
+      # cross-arch RUN steps inside the Dockerfiles need binfmt_misc qemu
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build cloud image (latest stable)
+        env:
+          ARCH: ${{ matrix.arch }}
+          OPENWORLD_PUBKEY: ${{ inputs.ssh_pubkey }}
+          OPENWORLD_ROOTPW: ${{ inputs.root_password }}
+        run: bash scripts/build-rootfs.sh "${{ matrix.name }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudimg-${{ matrix.name }}-${{ matrix.arch }}-rootpw
+          path: dist/
+          if-no-files-found: error
+          compression-level: 0
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd artifacts
+          cat *-SHA256SUMS > SHA256SUMS
+          gh release create "$GITHUB_REF_NAME" \
+            *.img SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "$GITHUB_REF_NAME" \
+            --notes "Bootable ext4 disk images (.img) for the latest Debian / Ubuntu / Alpine stable, built from Docker base images (no cloud-init). Each image boots with dropbear as its SSH server (no OpenSSH, key-only logins); pass the ssh_pubkey input at dispatch time to bake a public key into the 'openworld' user's authorized_keys. Built by this workflow: the root account also gets the pre-set password (root:root), so the serial/console login works."
