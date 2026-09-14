@@ -15,11 +15,16 @@ RUN set -e \
 # postinst leaves NO_START=0 so its service is enabled at boot; -s enforces
 # key-only logins. Best-effort systemd-sysusers/systemd-tmpfiles here so the
 # exported rootfs is consistent (systemd redoes it at first boot anyway).
-# Serial getty (from a console=ttyS0 cmdline) BindsTo dev-ttyS0.device; cap
-# that job's timeout so a delayed/missing ttyS0 stalls boot ~20s at most.
+# The serial console stays enabled: the VM can provide ttyS0, so keep the
+# serial-getty generated from the kernel cmdline. systemd-udevd is enabled
+# explicitly because a Docker-exported rootfs may miss the package postinst's
+# enablement - udevd is what activates dev-*.device units (incl. dev-ttyS0) and
+# applies the eth0 rename rule. When the VM has no ttyS0 the device job is
+# capped at 20s so the boot still proceeds instead of stalling the default 90s.
 RUN set -e \
   && { systemd-sysusers 2>/dev/null || true; } \
   && { systemd-tmpfiles --create 2>/dev/null || true; } \
+  && { systemctl enable systemd-udevd.service 2>/dev/null || true; } \
   && mkdir -p /etc/network /etc/udev/rules.d \
   && mkdir -p /etc/systemd/system/dev-ttyS0.device.d \
   && printf '[Unit]\nJobRunningTimeoutSec=20s\n' \
