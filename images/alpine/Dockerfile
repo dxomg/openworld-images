@@ -18,11 +18,15 @@ RUN mkdir -p /etc/network \
 # logins (-s) and generates host keys on first start.
 COPY interfaces /etc/network/interfaces
 COPY dropbear.init /etc/init.d/dropbear
+COPY openworld-firstboot.sh /usr/local/sbin/openworld-firstboot.sh
+COPY openworld-firstboot.init /etc/init.d/openworld-firstboot
 
 RUN set -e \
   && chmod +x /etc/init.d/dropbear \
+  && chmod +x /usr/local/sbin/openworld-firstboot.sh /etc/init.d/openworld-firstboot \
   && rc-update add networking default \
   && rc-update add dropbear default \
+  && rc-update add openworld-firstboot default \
   && rm -rf /var/cache/apk/* /usr/share/doc /usr/share/man /usr/share/info
 
 # Optional: set a root password so the console/login works. Without it root

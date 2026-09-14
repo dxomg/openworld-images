@@ -1,0 +1,18 @@
+# One-shot: mount a secondary seed disk and apply its 'userdata' file
+# (OPENWORLD_USER / OPENWORLD_PASSWORD / OPENWORLD_PUBKEY), then disable
+# itself. Ordered before dropbear so ssh keys are in place before the first
+# login attempt. See /usr/local/sbin/openworld-firstboot.sh.
+[Unit]
+Description=Openworld first-boot provisioning from seed disk
+After=local-fs.target
+Before=dropbear.service
+Wants=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/openworld-firstboot.sh
+StandardOutput=journal+console
+
+[Install]
+WantedBy=multi-user.target

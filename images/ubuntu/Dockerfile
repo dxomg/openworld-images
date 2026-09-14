@@ -37,21 +37,27 @@ RUN set -e \
   && { systemd-tmpfiles --create 2>/dev/null || true; } \
   && mkdir -p /etc/network /etc/udev/rules.d \
   && mkdir -p /etc/systemd/system/sysinit.target.wants /etc/systemd/system/getty.target.wants \
+  && mkdir -p /etc/systemd/system/multi-user.target.wants \
   && ln -sfn /usr/lib/systemd/system/systemd-udevd.service \
        /etc/systemd/system/sysinit.target.wants/systemd-udevd.service \
   && ln -sfn /usr/lib/systemd/system/openworld-serial-console.service \
        /etc/systemd/system/getty.target.wants/openworld-serial-console.service \
+  && ln -sfn /usr/lib/systemd/system/openworld-firstboot.service \
+       /etc/systemd/system/multi-user.target.wants/openworld-firstboot.service \
   && ln -sf /dev/null /etc/systemd/system/serial-getty@ttyS0.service \
   && ln -sf /dev/null /etc/systemd/system/systemd-journal-catalog-update.service
 
 COPY interfaces /etc/network/interfaces
 COPY 99-openworld-eth0.rules /etc/udev/rules.d/99-openworld-eth0.rules
 COPY openworld-serial-console.service /usr/lib/systemd/system/openworld-serial-console.service
+COPY openworld-firstboot.sh /usr/local/sbin/openworld-firstboot.sh
+COPY openworld-firstboot.service /usr/lib/systemd/system/openworld-firstboot.service
 
 # dropbear is the only ssh server (openssh-server is never installed): the
 # postinst leaves NO_START=0 so its service is enabled at boot; -s enforces
 # key-only logins.
 RUN set -e \
+  && chmod +x /usr/local/sbin/openworld-firstboot.sh \
   && { sed -i 's/^DROPBEAR_EXTRA_ARGS=.*/DROPBEAR_EXTRA_ARGS="-s"/' \
          /etc/default/dropbear 2>/dev/null \
        || echo 'DROPBEAR_EXTRA_ARGS="-s"' >> /etc/default/dropbear; } \
