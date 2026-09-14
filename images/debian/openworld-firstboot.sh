@@ -1,9 +1,10 @@
 #!/bin/sh
 # Openworld seed provisioning (cloud-init replacement): look for a secondary
-# disk at boot, mount it read-only, and apply its 'userdata' file
-# (OPENWORLD_USER / OPENWORLD_PASSWORD / OPENWORLD_PUBKEY). Runs once: after
-# provisioning it stamps /var/lib/openworld/firstboot.done and disables itself
-# so it never re-applies over later host-side changes.
+# disk at boot, mount it read-only, and apply its 'userdata' file:
+#   OPENWORLD_USER / OPENWORLD_PASSWORD / OPENWORLD_PUBKEY  (credentials)
+#   OPENWORLD_NETWORK / address / netmask / gateway / DNS  (networking)
+# Runs once: after provisioning it stamps /var/lib/openworld/firstboot.done
+# and disables itself so it never re-applies over later host-side changes.
 
 SENTINEL=/var/lib/openworld/firstboot.done
 MOUNTDIR=/mnt/openworld-seed
@@ -64,6 +65,37 @@ if [ -n "${OPENWORLD_PUBKEY:-}" ]; then
     chown -R "$user:" "$home/.ssh" 2>/dev/null || true
     chmod 700 "$home"
     chmod 600 "$home/.ssh/authorized_keys"
+fi
+
+# Network: OPENWORLD_NETWORK=static|dhcp (default: keep the baked DHCP config).
+# For static, use OPENWORLD_ADDRESS, OPENWORLD_NETMASK, OPENWORLD_GATEWAY and
+# OPENWORLD_DNS (space separated). The interfaces file (ifupdown/netifrc,
+# same syntax on Debian/Ubuntu and Alpine) is rewritten and the interface is
+# re-raised so the config is live before dropbear serves ssh.
+if [ -n "${OPENWORLD_NETWORK:-}" ]; then
+    eth="${OPENWORLD_ETH:-eth0}"
+    if [ "$OPENWORLD_NETWORK" = "static" ] && [ -n "${OPENWORLD_ADDRESS:-}" ]; then
+        {
+            echo "auto $eth"
+            echo "iface $eth inet static"
+            echo "    address $OPENWORLD_ADDRESS"
+            echo "    netmask ${OPENWORLD_NETMASK:-255.255.255.0}"
+            [ -n "${OPENWORLD_GATEWAY:-}" ] && echo "    gateway $OPENWORLD_GATEWAY"
+            [ -n "${OPENWORLD_DNS:-}" ] && echo "    dns-nameservers $OPENWORLD_DNS"
+        } > /etc/network/interfaces
+        if [ -n "${OPENWORLD_DNS:-}" ]; then
+            : > /etc/resolv.conf
+            for d in $OPENWORLD_DNS; do
+                echo "nameserver $d" >> /etc/resolv.conf
+            done
+        fi
+    elif [ "$OPENWORLD_NETWORK" = "dhcp" ]; then
+        printf 'auto %s\niface %s inet dhcp\n' "$eth" "$eth" > /etc/network/interfaces
+    fi
+    if command -v ifdown >/dev/null 2>&1; then
+        ifdown "$eth" >/dev/null 2>&1 || true
+        ifup "$eth" >/dev/null 2>&1 || true
+    fi
 fi
 
 mkdir -p "$(dirname "$SENTINEL")"
