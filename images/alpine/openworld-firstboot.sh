@@ -3,6 +3,7 @@
 # disk at boot, mount it read-only, and apply its 'userdata' file:
 #   OPENWORLD_USER / OPENWORLD_PASSWORD / OPENWORLD_PUBKEY  (credentials)
 #   OPENWORLD_NETWORK / address / netmask / gateway / DNS  (networking)
+#   OPENWORLD_HOSTNAME                                  (hostname)
 # Runs once: after provisioning it stamps /var/lib/openworld/firstboot.done
 # and disables itself so it never re-applies over later host-side changes.
 
@@ -95,6 +96,15 @@ if [ -n "${OPENWORLD_NETWORK:-}" ]; then
     if command -v ifdown >/dev/null 2>&1; then
         ifdown "$eth" >/dev/null 2>&1 || true
         ifup "$eth" >/dev/null 2>&1 || true
+    fi
+fi
+
+if [ -n "${OPENWORLD_HOSTNAME:-}" ]; then
+    hostname "$OPENWORLD_HOSTNAME" 2>/dev/null || true
+    printf '%s\n' "$OPENWORLD_HOSTNAME" > /etc/hostname
+    sed -i "s/^127\.0\.1\.1[[:space:]].*/127.0.1.1 $OPENWORLD_HOSTNAME/" /etc/hosts
+    if command -v hostnamectl >/dev/null 2>&1; then
+        hostnamectl set-hostname "$OPENWORLD_HOSTNAME" 2>/dev/null || true
     fi
 fi
 
