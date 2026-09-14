@@ -22,7 +22,9 @@ RUN set -e \
 # dev-ttyS0.device job). That generated unit is therefore masked. systemd-udevd
 # is explicitly tied to sysinit.target (the package postinst may not have
 # enabled it in a Docker build) because udev applies the eth0 rename rule and
-# manages the other devices.
+# manages the other devices. systemd-journal-catalog-update is masked too: it
+# only needs to run when systemd package files are installed/upgraded at
+# runtime, which never happens on an immutable image, and it fails otherwise.
 RUN set -e \
   && { systemd-sysusers 2>/dev/null || true; } \
   && { systemd-tmpfiles --create 2>/dev/null || true; } \
@@ -32,7 +34,8 @@ RUN set -e \
        /etc/systemd/system/sysinit.target.wants/systemd-udevd.service \
   && ln -sfn /usr/lib/systemd/system/openworld-serial-console.service \
        /etc/systemd/system/getty.target.wants/openworld-serial-console.service \
-  && ln -sf /dev/null /etc/systemd/system/serial-getty@ttyS0.service
+  && ln -sf /dev/null /etc/systemd/system/serial-getty@ttyS0.service \
+  && ln -sf /dev/null /etc/systemd/system/systemd-journal-catalog-update.service
 
 COPY interfaces /etc/network/interfaces
 COPY 99-openworld-eth0.rules /etc/udev/rules.d/99-openworld-eth0.rules
