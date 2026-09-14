@@ -11,6 +11,18 @@ RUN set -e \
        systemd-sysv dropbear ifupdown isc-dhcp-client \
   && rm -rf /var/lib/apt/lists/*
 
+# Keep future apt installs docs-free too (mirrors the paths the build strips).
+RUN set -e \
+  && mkdir -p /etc/dpkg/dpkg.cfg.d \
+  && cat > /etc/dpkg/dpkg.cfg.d/nodoc << 'EOF'
+path-exclude=/usr/share/doc/*
+path-include=/usr/share/doc/*/copyright
+path-exclude=/usr/share/man/*
+path-exclude=/usr/share/groff/*
+path-exclude=/usr/share/info/*
+path-exclude=/usr/share/lintian/*
+EOF
+
 # dropbear is the only ssh server (openssh-server is never installed): the
 # postinst leaves NO_START=0 so its service is enabled at boot; -s enforces
 # key-only logins. Best-effort systemd-sysusers/systemd-tmpfiles here so the

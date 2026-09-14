@@ -20,6 +20,18 @@ RUN set -e \
        systemd-sysv dropbear ifupdown isc-dhcp-client \
   && rm -rf /var/lib/apt/lists/*
 
+# Keep future apt installs docs-free too (mirrors the paths the build strips).
+RUN set -e \
+  && mkdir -p /etc/dpkg/dpkg.cfg.d \
+  && cat > /etc/dpkg/dpkg.cfg.d/nodoc << 'EOF'
+path-exclude=/usr/share/doc/*
+path-include=/usr/share/doc/*/copyright
+path-exclude=/usr/share/man/*
+path-exclude=/usr/share/groff/*
+path-exclude=/usr/share/info/*
+path-exclude=/usr/share/lintian/*
+EOF
+
 # Materialize system users/state dirs best-effort (systemd's own
 # systemd-sysusers/systemd-tmpfiles units redo it at first boot anyway). The
 # serial console is provided by openworld-serial-console.service (a plain
