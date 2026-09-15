@@ -1,0 +1,18 @@
+# One-shot: run the openworld-provision (tiny-cloud-style) provisioner which
+# applies user-data/ssh keys from a 'cidata' seed disk/ISO or the EC2-style
+# metadata service, then disables itself. Ordered before dropbear so keys are
+# in place before the first ssh connection. See /usr/local/sbin/openworld-provision.sh.
+[Unit]
+Description=Openworld provisioning (tiny-cloud style, cidata/imds)
+After=local-fs.target
+Before=dropbear.service
+Wants=local-fs.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/openworld-provision.sh
+StandardOutput=journal+console
+
+[Install]
+WantedBy=multi-user.target

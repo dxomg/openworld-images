@@ -2,8 +2,9 @@
 
 Bootable ext4 disk images (`.img`) for **Debian**, **Ubuntu** and **Alpine**, built for
 lightweight microVMs (Firecracker, QEMU, etc.) with **no cloud-init** and no `cloud-init`
-dependency anywhere. Provisioning is handled by a small built-in "seed disk" mechanism that
-mimics the classic `nocloud`/`NoCloud` data-source workflow.
+dependency anywhere. Provisioning is handled by `openworld-provision`, a tiny-cloud-style
+first-boot bootstrap (a single shared POSIX `sh` script used by all three distros) that
+reads a NoCloud-style `cidata` seed disk/ISO or an EC2-style metadata service.
 
 Each image is a minimal, immutable-style rootfs: slimmed live services, key-only
 [dropbear](https://matt.ucc.asn.au/dropbear/dropbear.html) SSH, and a serial console on
@@ -15,11 +16,14 @@ Each image is a minimal, immutable-style rootfs: slimmed live services, key-only
 - [Get the images](#get-the-images)
 - [Boot a VM](#boot-a-vm)
 - [Access](#access)
-- [Seed provisioning (custom no-cloud)](#seed-provisioning-custom-no-cloud)
+- [Provisioning (tiny-cloud style)](#provisioning-tiny-cloud-style)
 - [Build locally](#build-locally)
 - [GitHub Actions](#github-actions)
 - [Image layout](#image-layout)
 - [Security notes](#security-notes)
+
+> Full walkthroughs, examples and troubleshooting live in
+> [`docs/PROVISIONING.md`](docs/PROVISIONING.md).
 
 ## Images
 
@@ -90,39 +94,36 @@ is_root_device = true`, plus a `tap`-backed network interface.
   is password-locked, so seed-provision a password/key first; on `-rootpw` images the
   pre-set root password works out of the box.
 
-## Seed provisioning (custom no-cloud)
+## Provisioning (tiny-cloud style)
 
-The images replace cloud-init with `openworld-firstboot`, a one-shot provisioner that runs
-once on first boot and applies a `userdata` file from a **secondary seed disk**. This is
-the equivalent of an `nocloud` datasource: you prepare a tiny disk, boot the VM with it
-attached, and the image configures itself before dropbear accepts the first connection.
+The images replace cloud-init with `openworld-provision`, a tiny-cloud-style bootstrap
+written once as a single POSIX `sh` script shared by all three distros (systemd on
+Debian/Ubuntu, OpenRC on Alpine). It runs once on first boot — before dropbear accepts any
+connection — and applies configuration from the first datasource it can reach:
 
-### 1. Make the seed disk
+| Datasource | Trigger | Applies |
+|------------|---------|---------|
+| **`cidata`** (NoCloud) | secondary disk/ISO labelled `cidata` (legacy `OPENWORLD` label also scanned) with `user-data` / `meta-data` | user-data, ssh keys, hostname from `meta-data` |
+| **`imds`** (metadata service) | `http://169.254.169.254` (EC2/OpenStack/Firecracker MMDS; IPv6 `[fd00:ec2::254]` fallback) | local-hostname, public keys, user-data |
 
-```sh
-truncate -s 1M seed.img
-mkfs.ext4 -L OPENWORLD seed.img        # label is optional but recommended
-```
+Which datasource is used is set by `OPENWORLD_CLOUD` in `/etc/openworld.conf` or in the
+environment (`auto` — cidata first, then imds — is the default; `none` disables
+provisioning). After a successful run it stamps `/var/lib/openworld/provisioned` and
+disables itself, so later host-side changes are never overwritten (to re-provision,
+re-flash the root image). With no datasource reachable, boot proceeds normally and it
+retries on the next boot.
 
-The image scans candidate devices in this order until it finds one with a `userdata` file:
+### `user-data`
 
-```
-/dev/disk/by-label/OPENWORLD  /dev/vdb  /dev/vdb1
-/dev/sdb  /dev/sdb1  /dev/xvdb  /dev/nvme0n1p1
-```
-
-Labeling the filesystem `OPENWORLD` is the most robust option (it survives kernel/virtio
-naming differences). ext4 and FAT both work.
-
-### 2. Write `userdata`
-
-`userdata` is sourced as a small shell script; it may set any of these variables:
+`user-data` is sourced as a small shell script and may set any of these variables
+(assignments in the *environment* or `/etc/openworld.conf` provide defaults; meta-data can
+also supply the hostname):
 
 | Variable              | Meaning                                                              |
 |-----------------------|----------------------------------------------------------------------|
 | `OPENWORLD_USER`      | Account to configure (default `root`)                                |
 | `OPENWORLD_PASSWORD`  | Set this account's password (`chpasswd`)                             |
-| `OPENWORLD_PUBKEY`    | One public key appended to `$user`'s `authorized_keys` (single line) |
+| `OPENWORLD_PUBKEY`    | Public key(s) added to `$user`'s `authorized_keys`                   |
 | `OPENWORLD_HOSTNAME`  | New hostname (applied live + persisted)                              |
 | `OPENWORLD_NETWORK`   | `static` or `dhcp` (default: keep baked DHCP config)                 |
 | `OPENWORLD_ADDRESS`   | Static IPv4 address (requires `OPENWORLD_NETWORK=static`)            |
@@ -130,8 +131,15 @@ naming differences). ext4 and FAT both work.
 | `OPENWORLD_GATEWAY`   | Default gateway                                                      |
 | `OPENWORLD_DNS`       | Space-separated nameservers (writes `resolv.conf`)                   |
 | `OPENWORLD_ETH`       | Interface to configure (default `eth0`)                              |
+| `OPENWORLD_CLOUD`     | Datasource: `auto` / `cidata` / `imds` / `none` (default `auto`)     |
+| `OPENWORLD_IMDS`      | Metadata service base URL for the `imds` datasource                  |
+| `OPENWORLD_RESIZE`    | `1` grow the root filesystem to fill the disk (default `1`, best-effort) |
 
-Example `userdata`:
+A `#!`-script `user-data` is executed as-is; a minimal `#cloud-config` carrying
+`hostname:`/`fqdn:` and `ssh_authorized_keys:` is also accepted. For anything richer,
+either use the shell-variable format above or a `#!/bin/sh` script.
+
+Example `user-data`:
 
 ```sh
 OPENWORLD_USER=root
@@ -147,9 +155,21 @@ OPENWORLD_DNS='1.1.1.1 8.8.8.8'
 OPENWORLD_HOSTNAME=mybox
 ```
 
-### 3. Boot with the seed disk attached
+### 1. cidata source (a seed disk or ISO)
 
-The seed disk must be the **second** disk (the root `.img` is disk 0):
+Prepare a tiny disk **or** ISO, put `user-data` (and optionally `meta-data` with
+`local-hostname:`) on it, and boot with it attached as a second device:
+
+```sh
+truncate -s 1M seed.img
+mkfs.ext4 -L cidata seed.img            # 'OPENWORLD' also still works
+```
+
+The image scans, in order: `/dev/disk/by-label/{cidata,OPENWORLD}`, then the usual
+second-disk names (`/dev/vdb`, `/dev/sdb`, `/dev/xvdb`, `/dev/nvme0n1p1`, `/dev/vdc`,
+`/dev/sr0`) until it finds a volume with `user-data`/`meta-data`. Labeling the filesystem
+`cidata` is the most robust option (it survives kernel/virtio naming differences);
+ext4, FAT and ISO9660 all work.
 
 ```sh
 qemu-system-x86_64 \
@@ -159,19 +179,30 @@ qemu-system-x86_64 \
   -nographic
 ```
 
-On Firecracker, add the seed disk as a second `Drive` with a non-root `drive_id`.
+On Firecracker, add the seed ISO/disk as a second `Drive` with a non-root `drive_id`.
+
+### 2. imds source (metadata service)
+
+When `OPENWORLD_CLOUD` allows it and no cidata volume appears, the provisioner queries the
+EC2-compatible metadata service (`OPENWORLD_IMDS`, default `http://169.254.169.254`; the
+IPv6 link-local `http://[fd00:ec2::254]` is tried as a fallback). It fetches
+`latest/meta-data/local-hostname`, `latest/meta-data/public-keys/0/openssh-key`, and
+`latest/user-data` (EC2) or the OpenStack equivalents (`openstack/latest/meta_data.json`,
+`openstack/latest/user_data`), so a provider that hands out DHCP gives the image a
+key/password/hostname automatically with no extra disk.
 
 ### Behaviour
 
-- Provisioning **runs once**: after applying `userdata` it stamps
-  `/var/lib/openworld/firstboot.done` and disables itself (`systemctl disable` on
-  systemd, `rc-update del` on Alpine). Later host-side changes are never overwritten
-  (to re-provision, re-flash the root image).
-- With **no seed disk attached**, boot proceeds normally and nothing is configured.
+- Provisioning **runs once** (sentinel + self-disable). Later host-side changes are never
+  overwritten.
 - The provisioner is ordered **before dropbear**, so keys/passwords are in place before
   the first ssh connection.
 - On static networking the interface is re-raised (ifdown/ifup) so the config is already
   live when dropbear starts.
+- `OPENWORLD_RESIZE=1` (default) best-effort grows the root filesystem if the device is
+  larger than the image (needs `resize2fs`/`blockdev`; omitted from Alpine and non-root
+  images, so no extra size is added).
+- Config lives in `/etc/openworld.conf` (all commented out by default).
 
 ## Build locally
 
@@ -218,17 +249,21 @@ tag pushes).
 scripts/
   build-rootfs.sh          # Docker -> exported rootfs -> shrunk ext4 .img
 images/
+  openworld-provision.sh   # the tiny-cloud-style provisioner (shared by all distros)
+  openworld-provision.service    # systemd unit (Debian/Ubuntu)
+  openworld-provision.init       # OpenRC init (Alpine)
+  openworld.conf           # provisioner config, copied to /etc/openworld.conf
   {debian,ubuntu,alpine}/
     Dockerfile             # provisions & slims the rootfs
     interfaces             # ifupdown config (DHCP eth0)
     99-openworld-eth0.rules     # udev rule pinning the nic to eth0 (systemd)
     openworld-serial-console.service  # ttyS0 agetty (systemd)
-    openworld-firstboot.sh  # the seed-disk provisioner (shared)
-    openworld-firstboot.service / .init  # systemd unit / OpenRC init
     dropbear.init           # key-only dropbear with host-key gen (Alpine)
 .github/workflows/
   build-images.yml          # no-rootpw pipeline
   build-images-rootpw.yml   # rootpw pipeline
+docs/
+  PROVISIONING.md          # full usage guide for the provisioner
 ```
 
 ## Security notes
@@ -237,7 +272,11 @@ images/
   well-known password (`root` by default) — expose them only on isolated networks, and
   change the password via seed provisioning or `-pw` dispatch input.
 - dropbear is key-only over ssh; password logins only exist at the console/serial.
-- The seed disk is mounted read-only and its `userdata` is executed as `root` — only
+- The seed disk/ISO is mounted read-only and its `user-data` is executed as `root` — only
   attach seed disks you control.
+- The `imds` datasource fetches keys/user-data over plain HTTP from the guest's metadata
+  service and executes it as `root`. Only enable it on networks where you trust the
+  metadata endpoint (hobby microVMs, local OpenStack/Firecracker), and set
+  `OPENWORLD_CLOUD=cidata` (or `none`) otherwise.
 - Images offer **no cloud-init** and **no cloud agent**; do not rely on cloud-vendor
   metadata services.

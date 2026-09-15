@@ -16,17 +16,18 @@ RUN mkdir -p /etc/network \
 
 # Overwrite any init script the dropbear apk ships: this one forces key-only
 # logins (-s) and generates host keys on first start.
-COPY interfaces /etc/network/interfaces
-COPY dropbear.init /etc/init.d/dropbear
-COPY openworld-firstboot.sh /usr/local/sbin/openworld-firstboot.sh
-COPY openworld-firstboot.init /etc/init.d/openworld-firstboot
+COPY images/alpine/interfaces /etc/network/interfaces
+COPY images/alpine/dropbear.init /etc/init.d/dropbear
+COPY images/openworld-provision.sh /usr/local/sbin/openworld-provision.sh
+COPY images/openworld-provision.init /etc/init.d/openworld-provision
+COPY images/openworld.conf /etc/openworld.conf
 
 RUN set -e \
   && chmod +x /etc/init.d/dropbear \
-  && chmod +x /usr/local/sbin/openworld-firstboot.sh /etc/init.d/openworld-firstboot \
+  && chmod +x /usr/local/sbin/openworld-provision.sh /etc/init.d/openworld-provision \
   && rc-update add networking default \
   && rc-update add dropbear default \
-  && rc-update add openworld-firstboot default \
+  && rc-update add openworld-provision default \
   && rm -rf /var/cache/apk/* /usr/share/doc /usr/share/man /usr/share/info
 
 # Optional: set a root password so the console/login works. Without it root

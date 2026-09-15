@@ -6,10 +6,12 @@
 #   ARCH    amd64 | arm64 | armhf | ... (env; default amd64)
 #
 # Each distro is provisioned into a Docker image instead of being bootstrapped
-# on the runner: images/<distro>/Dockerfile (with its COPY-able config files)
-# installs dropbear, networking and slimmes the base. The container is exported
-# with `docker export`, unpacked, and projected onto a raw ext4 image that is
-# shrunk to its exact minimum (resize2fs -M, no journal, no reserved blocks).
+# on the runner: images/<distro>/Dockerfile (built with the repo root as the
+# build context so the shared images/openworld-provision.* provisioning files
+# are COPY-able) installs dropbear, networking and slims the base. The
+# container is exported with `docker export`, unpacked, and projected onto a
+# raw ext4 image that is shrunk to its exact minimum (resize2fs -M, no
+# journal, no reserved blocks).
 #
 # A public SSH key may be baked into the images by setting OPENWORLD_PUBKEY;
 # without it the images still boot but have no ssh-configured account. A root
@@ -23,7 +25,8 @@ ROOTPW="${OPENWORLD_ROOTPW:-}"
 
 OUT="dist"
 ROOTFS="$(mktemp -d)"
-BLDDIR="images/$DISTRO"
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+BLDDIR="$REPO/images/$DISTRO"
 TAG="openworld-$DISTRO:$ARCH"
 
 trap 'sudo rm -rf "$ROOTFS"' EXIT
@@ -34,6 +37,12 @@ case "$DISTRO" in
   *) echo "error: unknown distro '$DISTRO' (use debian, ubuntu or alpine)" >&2; exit 1 ;;
 esac
 [ -d "$BLDDIR" ] || { echo "error: no Dockerfile context at $BLDDIR" >&2; exit 1; }
+[ -f "$BLDDIR/Dockerfile" ] || { echo "error: no Dockerfile at $BLDDIR/Dockerfile" >&2; exit 1; }
+
+# Build with the repo root as context so every $DISTRO Dockerfile can COPY the
+# shared provisioning files (images/openworld-provision.sh, ...).
+DOCKERFILE="$BLDDIR/Dockerfile"
+CONTEXT="$REPO"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "error: docker not found in PATH" >&2
@@ -47,7 +56,7 @@ fi
 
 echo "building rootfs for $DISTRO ($ARCH) from $BLDDIR"
 if docker buildx version >/dev/null 2>&1; then
-  args=(buildx build --platform "linux/$ARCH" --load -t "$TAG" -f "$BLDDIR/Dockerfile" "$BLDDIR")
+  args=(buildx build --platform "linux/$ARCH" --load -t "$TAG" -f "$DOCKERFILE" "$CONTEXT")
   [ -n "$PUBKEY" ] && args+=(--build-arg "OPENWORLD_PUBKEY=$PUBKEY")
   [ -n "$ROOTPW" ] && args+=(--build-arg "OPENWORLD_ROOTPW=$ROOTPW")
   docker "${args[@]}"
@@ -56,7 +65,7 @@ elif [ "$ARCH" = "$(uname -m)" ]; then
   docker build -t "$TAG" \
     --build-arg "OPENWORLD_PUBKEY=$PUBKEY" \
     --build-arg "OPENWORLD_ROOTPW=$ROOTPW" \
-    -f "$BLDDIR/Dockerfile" "$BLDDIR"
+    -f "$DOCKERFILE" "$CONTEXT"
 else
   echo "error: cross-arch ($ARCH) builds need buildx (docker buildx version fails)" >&2
   exit 1

@@ -1,0 +1,15 @@
+#!/sbin/openrc-run
+# openworld-provision: same tiny-cloud-style mechanism as the systemd images,
+# driven by OpenRC. Runs in the default runlevel before dropbear.
+description="Openworld provisioning (tiny-cloud style, cidata/imds)"
+
+depend() {
+    need localmount
+    before dropbear
+}
+
+start() {
+    ebegin "Openworld provisioning (cidata/imds)"
+    /usr/local/sbin/openworld-provision.sh
+    eend $? "openworld provisioning done (or no datasource found)"
+}

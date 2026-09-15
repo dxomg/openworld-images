@@ -1,0 +1,6 @@
+dist/
+.git/
+.github/
+scripts/
+*.img
+*.iso

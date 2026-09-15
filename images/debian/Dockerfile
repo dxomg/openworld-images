@@ -8,7 +8,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN set -e \
   && apt-get update -qq \
   && apt-get install -y --no-install-recommends \
-       systemd-sysv dropbear ifupdown isc-dhcp-client \
+       systemd-sysv dropbear ifupdown isc-dhcp-client curl \
   && rm -rf /var/lib/apt/lists/*
 
 # Keep future apt installs docs-free too (mirrors the paths the build strips).
@@ -47,19 +47,20 @@ RUN set -e \
        /etc/systemd/system/sysinit.target.wants/systemd-udevd.service \
   && ln -sfn /usr/lib/systemd/system/openworld-serial-console.service \
        /etc/systemd/system/getty.target.wants/openworld-serial-console.service \
-  && ln -sfn /usr/lib/systemd/system/openworld-firstboot.service \
-       /etc/systemd/system/multi-user.target.wants/openworld-firstboot.service \
+  && ln -sfn /usr/lib/systemd/system/openworld-provision.service \
+       /etc/systemd/system/multi-user.target.wants/openworld-provision.service \
   && ln -sf /dev/null /etc/systemd/system/serial-getty@ttyS0.service \
   && ln -sf /dev/null /etc/systemd/system/systemd-journal-catalog-update.service
 
-COPY interfaces /etc/network/interfaces
-COPY 99-openworld-eth0.rules /etc/udev/rules.d/99-openworld-eth0.rules
-COPY openworld-serial-console.service /usr/lib/systemd/system/openworld-serial-console.service
-COPY openworld-firstboot.sh /usr/local/sbin/openworld-firstboot.sh
-COPY openworld-firstboot.service /usr/lib/systemd/system/openworld-firstboot.service
+COPY images/debian/interfaces /etc/network/interfaces
+COPY images/debian/99-openworld-eth0.rules /etc/udev/rules.d/99-openworld-eth0.rules
+COPY images/debian/openworld-serial-console.service /usr/lib/systemd/system/openworld-serial-console.service
+COPY images/openworld-provision.sh /usr/local/sbin/openworld-provision.sh
+COPY images/openworld-provision.service /usr/lib/systemd/system/openworld-provision.service
+COPY images/openworld.conf /etc/openworld.conf
 
 RUN set -e \
-  && chmod +x /usr/local/sbin/openworld-firstboot.sh \
+  && chmod +x /usr/local/sbin/openworld-provision.sh \
   && { sed -i 's/^DROPBEAR_EXTRA_ARGS=.*/DROPBEAR_EXTRA_ARGS="-s"/' \
          /etc/default/dropbear 2>/dev/null \
        || echo 'DROPBEAR_EXTRA_ARGS="-s"' >> /etc/default/dropbear; } \

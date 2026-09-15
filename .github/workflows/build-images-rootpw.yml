@@ -31,6 +31,7 @@ on:
     tags: ['*']
     paths:
       - ".github/workflows/build-images-rootpw.yml"
+      - ".dockerignore"
       - "scripts/**"
       - "images/**"
   schedule:
@@ -143,12 +144,12 @@ jobs:
             REL="${GITHUB_REF#refs/tags/}"
             gh release create "$REL" *.img SHA256SUMS --repo "$GITHUB_REPOSITORY" \
               --title "$REL" --verify-tag \
-              --notes "Bootable ext4 disk images (.img) for the latest Debian / Ubuntu / Alpine stable, built from Docker base images (no cloud-init). Key-only dropbear plus a pre-set root password; pass the ssh_pubkey input to bake a public key into the 'openworld' user."
+              --notes "Bootable ext4 disk images (.img) for the latest Debian / Ubuntu / Alpine stable, built from Docker base images (no cloud-init). Tiny-cloud-style provisioning (cidata seed disk/ISO or 169.254.169.254 metadata service). Key-only dropbear plus a pre-set root password; pass ssh_pubkey to bake a key into the openworld user."
           else
             REL="openworld-images-rootpw"
             gh release view "$REL" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
               && gh release delete "$REL" --yes --cleanup-tag --repo "$GITHUB_REPOSITORY"
             gh release create "$REL" *.img SHA256SUMS --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" --title "openworld-images-rootpw (rolling)" \
-              --notes "Latest build from a push, the weekly schedule, or manual dispatch. Bootable ext4 disk images (.img) for the latest Debian / Ubuntu / Alpine stable, built from Docker base images (no cloud-init). Key-only dropbear plus a pre-set root password (so the serial/console login works); pass the ssh_pubkey input at dispatch time to bake a public key into the 'openworld' user's authorized_keys."
+              --notes "Latest build from a push, the weekly schedule, or manual dispatch. Bootable ext4 disk images (.img) for the latest Debian / Ubuntu / Alpine stable, built from Docker base images (no cloud-init). Tiny-cloud-style provisioning (cidata seed disk/ISO or 169.254.169.254 metadata service). Key-only dropbear plus a pre-set root password; pass ssh_pubkey at dispatch time to bake a key into the openworld user."
           fi

@@ -17,7 +17,7 @@ RUN set -e \
        "$CODENAME" > /etc/apt/sources.list.d/99-openworld-universe.sources \
   && apt-get update -qq \
   && apt-get install -y --no-install-recommends \
-       systemd-sysv dropbear ifupdown isc-dhcp-client \
+       systemd-sysv dropbear ifupdown isc-dhcp-client curl \
   && rm -rf /var/lib/apt/lists/*
 
 # Keep future apt installs docs-free too (mirrors the paths the build strips).
@@ -54,22 +54,23 @@ RUN set -e \
        /etc/systemd/system/sysinit.target.wants/systemd-udevd.service \
   && ln -sfn /usr/lib/systemd/system/openworld-serial-console.service \
        /etc/systemd/system/getty.target.wants/openworld-serial-console.service \
-  && ln -sfn /usr/lib/systemd/system/openworld-firstboot.service \
-       /etc/systemd/system/multi-user.target.wants/openworld-firstboot.service \
+  && ln -sfn /usr/lib/systemd/system/openworld-provision.service \
+       /etc/systemd/system/multi-user.target.wants/openworld-provision.service \
   && ln -sf /dev/null /etc/systemd/system/serial-getty@ttyS0.service \
   && ln -sf /dev/null /etc/systemd/system/systemd-journal-catalog-update.service
 
-COPY interfaces /etc/network/interfaces
-COPY 99-openworld-eth0.rules /etc/udev/rules.d/99-openworld-eth0.rules
-COPY openworld-serial-console.service /usr/lib/systemd/system/openworld-serial-console.service
-COPY openworld-firstboot.sh /usr/local/sbin/openworld-firstboot.sh
-COPY openworld-firstboot.service /usr/lib/systemd/system/openworld-firstboot.service
+COPY images/ubuntu/interfaces /etc/network/interfaces
+COPY images/ubuntu/99-openworld-eth0.rules /etc/udev/rules.d/99-openworld-eth0.rules
+COPY images/ubuntu/openworld-serial-console.service /usr/lib/systemd/system/openworld-serial-console.service
+COPY images/openworld-provision.sh /usr/local/sbin/openworld-provision.sh
+COPY images/openworld-provision.service /usr/lib/systemd/system/openworld-provision.service
+COPY images/openworld.conf /etc/openworld.conf
 
 # dropbear is the only ssh server (openssh-server is never installed): the
 # postinst leaves NO_START=0 so its service is enabled at boot; -s enforces
 # key-only logins.
 RUN set -e \
-  && chmod +x /usr/local/sbin/openworld-firstboot.sh \
+  && chmod +x /usr/local/sbin/openworld-provision.sh \
   && { sed -i 's/^DROPBEAR_EXTRA_ARGS=.*/DROPBEAR_EXTRA_ARGS="-s"/' \
          /etc/default/dropbear 2>/dev/null \
        || echo 'DROPBEAR_EXTRA_ARGS="-s"' >> /etc/default/dropbear; } \
