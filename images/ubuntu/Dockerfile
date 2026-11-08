@@ -108,6 +108,15 @@ RUN set -e \
   && ln -sf /dev/null /etc/systemd/system/systemd-coredump.socket \
   && ln -sf /dev/null /etc/systemd/system/systemd-coredump.service
 
+# TERM policy: xterm-256color is the default terminal type on openworld
+# images. Login shells (serial console and ssh, which forwards the client's
+# TERM) get it forced here, so trimmed-terminfo "unknown terminal type"
+# errors cannot happen. Sourced via /etc/profile.
+RUN mkdir -p /etc/profile.d && cat > /etc/profile.d/openworld-term.sh << 'EOF'
+TERM=xterm-256color
+export TERM
+EOF
+
 # Optional: set a root password so the console/login works. Without it root
 # stays password-locked (the intended key-only dropbear setup).
 ARG OPENWORLD_ROOTPW=

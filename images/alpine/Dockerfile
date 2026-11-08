@@ -7,8 +7,8 @@ FROM alpine:latest
 # plus netifrc (networking) and dropbear, and add a serial getty on ttyS0 so a
 # VM always has a login prompt.
 RUN mkdir -p /etc/network \
-  && apk add --no-cache openrc dropbear netifrc \
-  && printf 'ttyS0::respawn:/sbin/getty -L 115200 ttyS0 vt100\n' >> /etc/inittab \
+  && apk add --no-cache openrc dropbear netifrc ncurses-terminfo-base \
+  && printf 'ttyS0::respawn:/sbin/getty -L 115200 ttyS0 xterm-256color\n' >> /etc/inittab \
   && mkdir -p /run/openrc \
   && touch /run/openrc/softlevel \
   && rc-update add devfs sysinit \
@@ -29,6 +29,15 @@ RUN set -e \
   && rc-update add dropbear default \
   && rc-update add openworld-provision default \
   && rm -rf /var/cache/apk/* /usr/share/doc /usr/share/man /usr/share/info
+
+# TERM policy: xterm-256color is the default terminal type on openworld
+# images. Login shells (serial console and ssh, which forwards the client's
+# TERM) get it forced here, so trimmed-terminfo "unknown terminal type"
+# errors cannot happen. Sourced via /etc/profile.
+RUN mkdir -p /etc/profile.d && cat > /etc/profile.d/openworld-term.sh << 'EOF'
+TERM=xterm-256color
+export TERM
+EOF
 
 # Optional: set a root password so the console/login works. Without it root
 # stays password-locked (the intended key-only dropbear setup).

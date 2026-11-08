@@ -13,7 +13,9 @@ IgnoreOnIsolate=yes
 ConditionPathExists=/dev/ttyS0
 
 [Service]
-ExecStart=-/sbin/agetty -s ttyS0 115200,38400,9600
+# Trailing argument = TERM for console logins; xterm-256color is the image
+# default (profile.d enforces the same for ssh sessions).
+ExecStart=-/sbin/agetty -s ttyS0 115200,38400,9600 xterm-256color
 Type=idle
 Restart=always
 RestartSec=0
