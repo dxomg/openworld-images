@@ -94,7 +94,7 @@ RUN set -e \
   && mkdir -p /tmp/keep/terminfo \
   && for d in /usr/share/terminfo /usr/lib/terminfo /lib/terminfo /etc/terminfo; do \
        [ -d "$d" ] || continue; \
-       for e in x/xterm x/xterm-256color l/linux v/vt100 v/vt220 d/dumb s/screen a/ansi; do \
+       for e in x/xterm x/xterm-256color l/linux v/vt100 v/vt102 v/vt220 d/dumb s/screen a/ansi; do \
          [ -f "$d/$e" ] || continue; \
          mkdir -p "/tmp/keep/terminfo/$(dirname "$e")"; \
          cp -a "$d/$e" "/tmp/keep/terminfo/$e"; \
